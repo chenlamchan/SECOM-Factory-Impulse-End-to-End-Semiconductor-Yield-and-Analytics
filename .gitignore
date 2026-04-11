@@ -5,9 +5,11 @@ __pycache__/
 **/logs/
 *.tar.gz
 *.jar
-*.data
+
+# Ignore data
+*.csv
+
 
 # Ignore environment variables
 .env
 /secrets
-

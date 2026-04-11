@@ -123,6 +123,55 @@ services:
       - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
       - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
 
+  # ==========================================================================
+  # Synthetic Data Generator
+  # ==========================================================================
+  generator-engine:
+    build:
+      context: ./services/synthetic-data-generator
+      dockerfile: Dockerfile
+    container_name: generator-engine
+    env_file: .env
+    environment:
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
+      DB_PATH: /app/db/simulation_state.db
+    depends_on:
+      minio:
+        condition: service_healthy
+    secrets:
+      - minio_user
+      - minio_password
+    volumes:
+      - generator_data:/app/db
+      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
+    command: python generator_daemon.py
+
+  generator-ui:
+    build:
+      context: ./services/synthetic-data-generator
+      dockerfile: Dockerfile
+    container_name: generator-ui
+    ports:
+      - "8501:8501"
+    env_file: .env
+    environment:
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
+      DB_PATH: /app/db/simulation_state.db
+    depends_on:
+      minio:
+        condition: service_healthy
+    secrets:
+      - minio_user
+      - minio_password
+    volumes:
+      - generator_data:/app/db
+      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
+    command: streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+
 # ============================================================================
 # Persistent Volumes
 # ============================================================================
@@ -131,6 +180,7 @@ volumes:
   prometheus_data:
   prometheus_secrets:
   grafana_data:
+  generator_data:
 
 # ============================================================================
 # Docker Secrets
