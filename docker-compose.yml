@@ -47,18 +47,15 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.93.0
     container_name: otel-collector
-    command: [ "--config=/etc/otel-collector-config.yaml" ]
+    command: [ "--config=/etc/otel-collector-config.yml" ]
     volumes:
-      - ./infrastructures/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./infrastructures/otel/otel-collector-config.yml:/etc/otel-collector-config.yml
     env_file: .env
     ports:
       - "4317:4317"   # OTLP gRPC receiver
       - "4318:4318"   # OTLP HTTP receiver
       - "8888:8888"   # Prometheus metrics (collector's own metrics)
       - "8889:8889"   # Prometheus exporter (application metrics)
-    depends_on:
-      tempo:
-        condition: service_healthy
 
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/health/status" ]
@@ -104,29 +101,27 @@ services:
       timeout: 5s
       retries: 3
 
-    # ==========================================================================
-    # Grafana (Metrics Visualization)
-    # ==========================================================================
-    grafana:
-      image: grafana/grafana:latest
-      container_name: grafana
-      depends_on:
-        - prometheus
-        - tempo
-        - loki
-      ports:
-        - "3000:3000"
-      secrets:
-        - grafana_password
-      env_file: .env
-      environment:
-        GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
-        GF_FEATURE_TOGGLES_ENABLE: traceqlEditor,traceToMetrics
-        GF_INSTALL_PLUGINS: grafana-piechart-panel
-      volumes:
-        - grafana_data:/var/lib/grafana
-        - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
-        - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
+  # ==========================================================================
+  # Grafana (Metrics Visualization)
+  # ==========================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    secrets:
+      - grafana_password
+    env_file: .env
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor,traceToMetrics
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
+      - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
 
 # ============================================================================
 # Persistent Volumes
