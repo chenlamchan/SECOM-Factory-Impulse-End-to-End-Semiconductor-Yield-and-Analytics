@@ -1,0 +1,150 @@
+services:
+  # ============================================================================
+  # MinIO (S3-Compatible Object Storage / Data Lake)
+  # ============================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    secrets:
+      - minio_user
+      - minio_password
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+      MINIO_PROMETHEUS_JOB_ID: "minio"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - prometheus_secrets:/secrets
+      - ./infrastructures/minio/init-minio.sh:/init-minio.sh
+    entrypoint: /bin/bash
+    secrets:
+      - minio_user
+      - minio_password
+    command: /init-minio.sh
+
+  # ==========================================================================
+  # OpenTelemetry Collector (The Heart of Modern Observability)
+  # ==========================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.93.0
+    container_name: otel-collector
+    command: [ "--config=/etc/otel-collector-config.yaml" ]
+    volumes:
+      - ./infrastructures/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    env_file: .env
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8888:8888"   # Prometheus metrics (collector's own metrics)
+      - "8889:8889"   # Prometheus exporter (application metrics)
+    depends_on:
+      tempo:
+        condition: service_healthy
+
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/health/status" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ==========================================================================
+  # Prometheus (Metrics Storage)
+  # ==========================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--enable-feature=exemplar-storage'
+    volumes:
+      - ./infrastructures/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./infrastructures/prometheus/alerts/:/etc/prometheus/alerts/
+      - prometheus_data:/prometheus
+      - prometheus_secrets:/etc/prometheus/secrets/:ro
+    ports:
+      - "9090:9090"
+    env_file: .env
+    secrets:
+      - minio_user
+      - minio_password
+    environment:
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+    depends_on:
+      otel-collector:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+    # ==========================================================================
+    # Grafana (Metrics Visualization)
+    # ==========================================================================
+    grafana:
+      image: grafana/grafana:latest
+      container_name: grafana
+      depends_on:
+        - prometheus
+        - tempo
+        - loki
+      ports:
+        - "3000:3000"
+      secrets:
+        - grafana_password
+      env_file: .env
+      environment:
+        GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
+        GF_FEATURE_TOGGLES_ENABLE: traceqlEditor,traceToMetrics
+        GF_INSTALL_PLUGINS: grafana-piechart-panel
+      volumes:
+        - grafana_data:/var/lib/grafana
+        - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
+        - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
+
+# ============================================================================
+# Persistent Volumes
+# ============================================================================
+volumes:
+  minio_data:
+  prometheus_data:
+  prometheus_secrets:
+  grafana_data:
+
+# ============================================================================
+# Docker Secrets
+# ============================================================================
+secrets:
+  minio_user:
+    file: ./secrets/minio_user.txt
+  minio_password:
+    file: ./secrets/minio_password.txt
+
+  grafana_password:
+    file: ./secrets/grafana_password.txt
