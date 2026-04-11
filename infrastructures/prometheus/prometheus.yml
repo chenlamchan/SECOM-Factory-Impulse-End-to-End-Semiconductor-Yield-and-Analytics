@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'market-pulse-prod'
+    replica: '1'
+
+# Alert rules file
+rule_files:
+  - '/etc/prometheus/alerts/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # ========================================================================
+  # APPLICATION METRICS
+  # ========================================================================
+
+  # Collector's own health metrics
+  - job_name: 'otel-collector-internal'
+    static_configs:
+      - targets: ['otel-collector:8888']
+        labels:
+          service: 'otel-collector'
+          component: 'collector'
+    scrape_interval: 15s
+
+  # ========================================================================
+  # INFRASTRUCTURE SERVICES
+  # ========================================================================
+
+  # MinIO Metrics
+  - job_name: 'minio'
+    metrics_path: '/minio/v2/metrics/cluster'
+    scheme: http
+    bearer_token_file: /etc/prometheus/secrets/minio_prometheus_token
+    static_configs:
+      - targets: ['minio:9000']
+    scrape_interval: 15s

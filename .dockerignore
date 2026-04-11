@@ -1,0 +1,7 @@
+# Ignore Everything
+**
+
+# Keep only what you need
+!pyproject.toml
+!poetry.lock
+!src

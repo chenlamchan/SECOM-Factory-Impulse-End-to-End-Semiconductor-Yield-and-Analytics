@@ -1,0 +1,22 @@
+groups:
+  - name: MinIOHealth
+    rules:
+      # 1. DATA LOSS RISK: Drives failing
+      - alert: MinIODriveOffline
+        expr: minio_cluster_drives_offline_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO Drive Failure"
+          description: "One or more drives are offline. Data redundancy is compromised."
+
+      # 2. CAPACITY WARNING: Running out of space
+      - alert: MinIOCapacityCritical
+        expr: (minio_cluster_capacity_usable_free_bytes / minio_cluster_capacity_usable_total_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO Capacity Critical"
+          description: "Cluster has less than 10% free space remaining."

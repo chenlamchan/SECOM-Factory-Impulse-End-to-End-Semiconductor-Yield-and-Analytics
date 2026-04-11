@@ -1,0 +1,13 @@
+# Ignore compiled/build artifacts
+__pycache__/
+.pytest_cache/
+.idea/
+**/logs/
+*.tar.gz
+*.jar
+*.data
+
+# Ignore environment variables
+.env
+/secrets
+
