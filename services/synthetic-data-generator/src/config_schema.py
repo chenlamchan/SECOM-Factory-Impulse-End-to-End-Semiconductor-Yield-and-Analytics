@@ -13,6 +13,9 @@ class ServiceConfig(BaseSettings):
     db_path:str
     raw_dataset_file:str
 
+    nats_endpoint:str = Field(default="nats://nats:4222")
+    nats_subject:str = Field(default="secom.data.generated")
+
     @property
     def minio_access_key(self):
         return Path(self.minio_access_key_file).read_text().strip()

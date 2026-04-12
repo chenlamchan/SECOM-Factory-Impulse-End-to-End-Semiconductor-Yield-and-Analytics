@@ -6,6 +6,9 @@ import pandas as pd
 import numpy as np
 import s3fs
 import json
+import nats
+import asyncio
+from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
 from config_schema import StateStore, SimulationConfig, ServiceConfig
 
 # Configure Production Logging
@@ -21,6 +24,9 @@ S3_ACCESS_KEY = service_config.minio_access_key
 S3_SECRET_KEY = service_config.minio_secret_key
 RAW_DATA_PATH = service_config.raw_dataset_file
 DB_PATH = service_config.db_path
+
+NATS_ENDPOINT = service_config.nats_endpoint
+NATS_SUBJECT = service_config.nats_subject
 
 class DataGeneratorDaemon:
     def __init__(self):
@@ -51,6 +57,17 @@ class DataGeneratorDaemon:
             key=S3_ACCESS_KEY, 
             secret=S3_SECRET_KEY
         )
+
+        self.nc = None
+
+    async def connect_nats(self):
+        """Establish connection to the NATS broker."""
+        try:
+            self.nc = await nats.connect(NATS_ENDPOINT)
+            logger.info(f"Connected to NATS broker at {NATS_ENDPOINT}")
+        except Exception as e:
+            logger.error(f"Failed to connect to NATS: {e}")
+            self.nc = None
 
     def _get_next_day_block(self) -> pd.DataFrame:
         """Samples all sequential rows for a specific day to preserve time-series behavior."""
@@ -92,12 +109,36 @@ class DataGeneratorDaemon:
 
         return df
 
-    def run_cycle(self):
+    async def publish_metadata(self, file_path: str, batch_size: int, config: SimulationConfig, timestamp: str):
+        """Publishes the generation event payload to NATS."""
+        if not self.nc or self.nc.is_closed:
+            await self.connect_nats()
+
+        if self.nc and self.nc.is_connected:
+            # Construct the event payload contract
+            payload = {
+                "event_type": "TEST_COMPLETED",
+                "file_path": file_path,
+                "batch_size": batch_size,
+                "is_synthetic": True,
+                "generation_timestamp": timestamp,
+                "applied_drift_features": config.drift_config
+            }
+            
+            try:
+                # NATS requires bytes
+                message = json.dumps(payload).encode('utf-8')
+                await self.nc.publish(NATS_SUBJECT, message)
+                logger.info(f"Published metadata to NATS subject '{NATS_SUBJECT}'")
+            except Exception as e:
+                logger.error(f"Error publishing to NATS: {e}")
+
+    async def run_cycle(self):
         config = self.state_store.get_config()
         
         if not config.is_running:
             logger.info("Daemon sleeping. State: is_running=False")
-            time.sleep(5)
+            await asyncio.sleep(5)
             return
 
         logger.info(f"Generating batch of {config.batch_size} wafers...")
@@ -112,6 +153,10 @@ class DataGeneratorDaemon:
 
         # 2. Inject Provenance Metadata
         now = datetime.datetime.now(datetime.timezone.utc)
+        iso_timestamp = now.isoformat()
+
+        mutated_df = mutated_df.copy()
+
         mutated_df['is_synthetic'] = True
         mutated_df['generation_timestamp'] = now
         mutated_df['applied_drift_features'] = json.dumps(config.drift_config)
@@ -119,22 +164,35 @@ class DataGeneratorDaemon:
         # 3. Write to MinIO (Hive Partitioned)
         partition_path = f"{S3_BUCKET}/year={now.year}/month={now.month:02d}/day={now.day:02d}"
         file_path = f"{partition_path}/batch_{int(now.timestamp())}.parquet"
+
+        success = False
         
         try:
-            mutated_df.to_parquet(file_path, filesystem=self.fs, index=False)
+            await asyncio.to_thread(mutated_df.to_parquet, file_path, filesystem=self.fs, index=False)
             logger.info(f"Successfully wrote batch to {file_path}")
+            success = True
         except Exception as e:
             logger.error(f"Failed to write to MinIO: {e}")
 
+        # 4. Publish Event to Message Broker
+        if success:
+            await self.publish_metadata(file_path, config.batch_size, config, iso_timestamp)  
+
         # Sleep for the configured interval
-        time.sleep(config.generation_interval_seconds)
+        await asyncio.sleep(config.generation_interval_seconds)
+
+    async def start(self):
+        """Main async entrypoint."""
+        await self.connect_nats()
+        logger.info("Generator Daemon Started.")
+        try:
+            while True:
+                await self.run_cycle()
+        finally:
+            if self.nc and not self.nc.is_closed:
+                await self.nc.drain()
+                logger.info("NATS connection drained and closed.")
 
 if __name__ == "__main__":
     daemon = DataGeneratorDaemon()
-    logger.info("Generator Daemon Started.")
-    while True:
-        try:
-            daemon.run_cycle()
-        except Exception as e:
-            logger.error(f"Fatal error in daemon cycle: {e}")
-            time.sleep(5) # Prevent tight crash loop
+    asyncio.run(daemon.start())

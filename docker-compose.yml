@@ -124,6 +124,16 @@ services:
       - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
 
   # ==========================================================================
+  # Nats (As message broker - like AWS SQS)
+  # ==========================================================================
+  nats:
+    image: nats:latest
+    container_name: nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  # ==========================================================================
   # Synthetic Data Generator
   # ==========================================================================
   generator-engine:
@@ -137,9 +147,12 @@ services:
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
       RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
       DB_PATH: /app/db/simulation_state.db
+      
     depends_on:
       minio:
         condition: service_healthy
+      nats:
+        condition: service_started
     secrets:
       - minio_user
       - minio_password
@@ -164,6 +177,8 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+      nats:
+        condition: service_started
     secrets:
       - minio_user
       - minio_password

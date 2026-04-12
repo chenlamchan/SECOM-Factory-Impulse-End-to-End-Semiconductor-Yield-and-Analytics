@@ -15,6 +15,7 @@ s3fs = "^2026.3.0"
 numpy = "^2.4.4"
 pydantic = "^2.12.5"
 pydantic-settings = "^2.13.1"
+nats-py = "^2.14.0"
 
 
 [build-system]
