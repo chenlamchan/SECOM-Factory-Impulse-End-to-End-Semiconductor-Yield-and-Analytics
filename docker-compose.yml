@@ -170,7 +170,7 @@ services:
     volumes:
       - generator_data:/app/db
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
-    command: streamlit run streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+    command: streamlit run streamlit_app.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
 # Persistent Volumes
