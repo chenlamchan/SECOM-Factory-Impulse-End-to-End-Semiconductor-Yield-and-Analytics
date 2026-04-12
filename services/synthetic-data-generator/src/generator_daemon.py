@@ -106,6 +106,10 @@ class DataGeneratorDaemon:
         batch_df = self._get_next_day_block()
         mutated_df = self.apply_mutations(batch_df, config)
 
+        if len(batch_df) > config.batch_size:
+            # Sample N rows and sort chronologically
+            mutated_df = mutated_df.sample(n=config.batch_size).sort_values('Time')
+
         # 2. Inject Provenance Metadata
         now = datetime.datetime.now(datetime.timezone.utc)
         mutated_df['is_synthetic'] = True
