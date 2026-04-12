@@ -27,6 +27,19 @@ class DataGeneratorDaemon:
         self.state_store = StateStore(DB_PATH)
         logger.info("Loading baseline SECOM dataset into memory...")
         self.baseline_df = pd.read_csv(RAW_DATA_PATH)
+
+        # Ensure 'Time' is parsed as datetime objects
+        self.baseline_df['Time'] = pd.to_datetime(self.baseline_df['Time'])
+        
+        # Create a helper column for grouping by calendar day
+        self.baseline_df['Date_Block'] = self.baseline_df['Time'].dt.date
+        
+        # Get a sorted list of unique days in the dataset to iterate through
+        self.unique_dates = sorted(self.baseline_df['Date_Block'].unique())
+        
+        # Initialize pointer to track sequential progress
+        self.current_date_idx = 0
+
         self.numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
         # Exclude targets or timestamp identifiers from noise/drift
         self.features_to_mutate = [c for c in self.numeric_cols if c not in ['Time', 'Target', 'Pass_Fail']]
@@ -39,14 +52,22 @@ class DataGeneratorDaemon:
             secret=S3_SECRET_KEY
         )
 
-    def _block_bootstrap(self, batch_size: int) -> pd.DataFrame:
-        """Samples sequential rows to preserve time-series autocorrelation."""
-        max_start_idx = len(self.baseline_df) - batch_size
-        if max_start_idx < 0:
-            return self.baseline_df.copy() # Fallback if batch > dataset
+    def _get_next_day_block(self) -> pd.DataFrame:
+        """Samples all sequential rows for a specific day to preserve time-series behavior."""
+        if not self.unique_dates:
+            return self.baseline_df.copy() # Fallback if dates couldn't be parsed
         
-        start_idx = random.randint(0, max_start_idx)
-        return self.baseline_df.iloc[start_idx : start_idx + batch_size].copy()
+        # Identify the date for this cycle
+        target_date = self.unique_dates[self.current_date_idx]
+        
+        # Filter the dataframe for the targeted day
+        day_block_df = self.baseline_df[self.baseline_df['Date_Block'] == target_date].copy()
+        
+        # Advance the index, loop back to 0 if we hit the end of the dataset
+        self.current_date_idx = (self.current_date_idx + 1) % len(self.unique_dates)
+        
+        # Drop the helper column before returning so it doesn't leak into downstream storage
+        return day_block_df.drop(columns=['Date_Block'])
 
     def apply_mutations(self, df: pd.DataFrame, config: SimulationConfig) -> pd.DataFrame:
         """Applies controlled jitter and targeted sigma shifts."""
@@ -82,7 +103,7 @@ class DataGeneratorDaemon:
         logger.info(f"Generating batch of {config.batch_size} wafers...")
         
         # 1. Generate Data
-        batch_df = self._block_bootstrap(config.batch_size)
+        batch_df = self._get_next_day_block()
         mutated_df = self.apply_mutations(batch_df, config)
 
         # 2. Inject Provenance Metadata

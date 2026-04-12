@@ -32,11 +32,21 @@ def load_baseline():
 def get_latest_generated_batch(fs):
     """Fetches the most recently generated parquet file from MinIO."""
     try:
-        files = fs.glob(f"{S3_BUCKET}/**/*.parquet")
-        if not files: return None
-        latest_file = sorted(files)[-1]
+        fs.invalidate_cache()
+
+        search_path = f"{S3_BUCKET.strip('/')}/**/*.parquet"
+        files = fs.glob(search_path)
+
+        if not files: 
+            return None
+
+        latest_file = max(files, key=lambda x: fs.info(x)['LastModified'])
+        
         with fs.open(latest_file, 'rb') as f:
-            return pd.read_parquet(f)
+            df = pd.read_parquet(f)
+            # Ensure we return a copy to avoid mutation issues
+            return df.copy()
+
     except Exception as e:
         st.error(f"MinIO Connection Error: {e}")
         return None
