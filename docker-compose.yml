@@ -146,7 +146,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-      
+
   postgres-init:
     image: postgres:15-alpine
     container_name: postgres-init
@@ -270,7 +270,9 @@ services:
 # Orchestration (Apache Airflow)
 # ============================================================================
   airflow-init:
-    image: apache/airflow:2.8.1
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
     container_name: airflow-init
     depends_on:
       postgres-init:
@@ -286,7 +288,9 @@ services:
     entrypoint: ['/bin/bash', "/airflow-init.sh"]
     
   airflow-webserver:
-    image: apache/airflow:2.8.1
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
     container_name: airflow-webserver
     depends_on:
       airflow-init:
@@ -307,7 +311,9 @@ services:
     command: webserver
 
   airflow-scheduler:
-    image: apache/airflow:2.8.1
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
     container_name: airflow-scheduler
     depends_on:
       airflow-init:
