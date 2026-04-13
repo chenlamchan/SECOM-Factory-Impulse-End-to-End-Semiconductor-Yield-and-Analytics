@@ -59,15 +59,27 @@ class DataGeneratorDaemon:
         )
 
         self.nc = None
+        self.jc = None
 
     async def connect_nats(self):
         """Establish connection to the NATS broker."""
         try:
             self.nc = await nats.connect(NATS_ENDPOINT)
+            self.js = self.nc.jetstream()
+
+            # Ensure the stream exists (Idempotent operation)
+            try:
+                await self.js.add_stream(name="SECOM_PIPELINE", subjects=[NATS_SUBJECT])
+                logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
+            except Exception as e:
+                # If it already exists, this is fine, but log other errors
+                logger.debug(f"Stream setup check: {e}")
+
             logger.info(f"Connected to NATS broker at {NATS_ENDPOINT}")
         except Exception as e:
             logger.error(f"Failed to connect to NATS: {e}")
             self.nc = None
+            self.js = None
 
     def _get_next_day_block(self) -> pd.DataFrame:
         """Samples all sequential rows for a specific day to preserve time-series behavior."""
@@ -114,7 +126,7 @@ class DataGeneratorDaemon:
         if not self.nc or self.nc.is_closed:
             await self.connect_nats()
 
-        if self.nc and self.nc.is_connected:
+        if self.js:
             # Construct the event payload contract
             payload = {
                 "event_type": "TEST_COMPLETED",
@@ -128,8 +140,9 @@ class DataGeneratorDaemon:
             try:
                 # NATS requires bytes
                 message = json.dumps(payload).encode('utf-8')
-                await self.nc.publish(NATS_SUBJECT, message)
-                logger.info(f"Published metadata to NATS subject '{NATS_SUBJECT}'")
+                ack = await self.js.publish(NATS_SUBJECT, message)
+                
+                logger.info(f"Published metadata to NATS subject '{NATS_SUBJECT}', Sequence: {ack.seq})")
             except Exception as e:
                 logger.error(f"Error publishing to NATS: {e}")
 

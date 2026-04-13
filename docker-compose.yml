@@ -132,6 +132,9 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
+    command: "-js"
+    volumes: 
+      - nats-data:/data
 
   # ==========================================================================
   # Synthetic Data Generator
@@ -196,6 +199,7 @@ volumes:
   prometheus_secrets:
   grafana_data:
   generator_data:
+  nats-data:
 
 # ============================================================================
 # Docker Secrets
