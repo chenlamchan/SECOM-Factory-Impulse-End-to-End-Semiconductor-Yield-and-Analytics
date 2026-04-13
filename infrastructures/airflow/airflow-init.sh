@@ -3,7 +3,7 @@ set -e
 
 # 1. Securely construct the DB Connection String in memory
 DB_PASSWORD=$(cat /run/secrets/airflow_db_password | tr -d '\n\r ')
-export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://airflow:${DB_PASSWORD}@postgres/${POSTGRES_DB}"
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://airflow:${DB_PASSWORD}@postgres/${CATALOG_NAME}"
 
 echo "Running Airflow DB migrations..."
 airflow db migrate

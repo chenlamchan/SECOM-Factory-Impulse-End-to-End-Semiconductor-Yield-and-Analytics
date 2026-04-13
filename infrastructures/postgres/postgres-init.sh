@@ -4,7 +4,7 @@ set -e
 SUPER_USER=$(cat /run/secrets/postgres_user | tr -d '\n\r ')
 SUPER_PASS=$(cat /run/secrets/postgres_password | tr -d '\n\r ')
 AIRFLOW_PASS=$(cat /run/secrets/airflow_db_password | tr -d '\n\r ')
-TARGET_DB="${TARGET_DB:?TARGET_DB must be set}"
+TARGET_DB=${CATALOG_NAME}
 
 export PGPASSWORD="$SUPER_PASS"
 
