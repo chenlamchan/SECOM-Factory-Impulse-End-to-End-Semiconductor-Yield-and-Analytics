@@ -138,7 +138,7 @@ with tab2:
 
         with col_a:
             st.markdown("### Feature Drift Detection (Relative Wasserstein)")
-            st.caption("Compares local distributions. Score > 0.05 indicates significant drift.")
+            st.caption("Compares local distributions. Score > X Threshold indicates significant drift.")
 
             # Select top features to test (e.g., first 10 for speed)
             test_features = baseline_df.select_dtypes(include=['float64']).columns[:10].tolist()

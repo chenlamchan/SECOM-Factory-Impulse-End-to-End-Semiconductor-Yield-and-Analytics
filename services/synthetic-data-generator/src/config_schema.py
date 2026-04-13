@@ -15,6 +15,7 @@ class ServiceConfig(BaseSettings):
 
     nats_endpoint:str = Field(default="nats://nats:4222")
     nats_subject:str = Field(default="secom.data.generated")
+    nats_stream_name:str = Field(default="SECOM_PIPELINE")
 
     @property
     def minio_access_key(self):

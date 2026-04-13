@@ -142,11 +142,11 @@ services:
       - postgres_user
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h localhost -U $(cat /run/secrets/postgres_user) -d postgres"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
-
+      retries: 10
+      start_period: 30s
+      
   postgres-init:
     image: postgres:15-alpine
     container_name: postgres-init

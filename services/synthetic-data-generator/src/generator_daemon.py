@@ -27,6 +27,7 @@ DB_PATH = service_config.db_path
 
 NATS_ENDPOINT = service_config.nats_endpoint
 NATS_SUBJECT = service_config.nats_subject
+NATS_STREAM = service_config.nats_stream_name
 
 class DataGeneratorDaemon:
     def __init__(self):
@@ -69,7 +70,7 @@ class DataGeneratorDaemon:
 
             # Ensure the stream exists (Idempotent operation)
             try:
-                await self.js.add_stream(name="SECOM_PIPELINE", subjects=[NATS_SUBJECT])
+                await self.js.add_stream(name=NATS_STREAM, subjects=[NATS_SUBJECT])
                 logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
             except Exception as e:
                 # If it already exists, this is fine, but log other errors

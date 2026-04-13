@@ -4,15 +4,9 @@ from typing import Dict, Optional
 from pathlib import Path
 
 class ServiceConfig(BaseSettings):
-    minio_endpoint:str = Field(default="http://minio:9000")
-    minio_warehouse:str = Field(default="s3://data-lake/warehouse")
-    minio_access_key_file:str
-    minio_secret_key_file:str
-
-    catalog_name:str
-    catalog_user:str = Field(default="airflow")
-    airflow_db_password_file:str
-
+    nats_endpoint:str = Field(default="nats://nats:4222")
+    nats_subject:str = Field(default="secom.data.generated")
+    
     @property
     def minio_access_key(self):
         return Path(self.minio_access_key_file).read_text().strip()
