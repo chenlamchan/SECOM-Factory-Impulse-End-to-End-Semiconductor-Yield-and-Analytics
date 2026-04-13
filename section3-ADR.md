@@ -151,3 +151,40 @@ Use **class weighting** at model training level (`class_weight='balanced'` in sk
 - Class weight parameter documented in model config, not hardcoded
 - Primary evaluation metric is F1 (positive class) and PR-AUC, not accuracy
 - SMOTE variant deferred to post-MVP with full lineage impact assessment
+
+---
+
+### ADR-007: Message Broker for Data Ingestion Buffering
+
+**Status:** ACCEPTED
+
+**Context:**
+The system requires a reliable handshake between the **Data Generation** module (simulating sensor output) and the **Data Ingestion** pipeline (Airflow). We need a mechanism to:
+1.  **Prevent Data Loss:** If Airflow is offline or a task fails, the "file ready" signals must be persisted.
+2.  **State-Based Polling:** Airflow needs to track progress via a "last processed" timestamp, but requires a buffer to handle bursts of synthetic data generation.
+3.  **Local Resource Efficiency:** The entire stack must run via Docker Compose on a single machine without consuming the high memory/CPU overhead associated with enterprise-scale brokers.
+
+**Decision:**
+Use **NATS with JetStream** enabled as the primary message broker and persistence buffer.
+
+**Rationale:**
+* **Simplicity:** NATS is a single 20MB binary. It is "cloud-native" and requires zero external dependencies (unlike Kafka which requires ZooKeeper or KRaft).
+* **JetStream Persistence:** By using JetStream, we gain "at-least-once" delivery guarantees. If the Airflow consumer fails, the message remains in the NATS stream until acknowledged.
+* **SQS-like Experience:** NATS provides a simple Subject-based messaging model that mimics the "lightweight" feel of AWS SQS, making it ideal for managing file-path metadata and timestamps.
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Apache Kafka** | Overkill for this scale. Requires significant JVM memory (2GB+) and complex configuration (partitions, offsets, ZK/KRaft) that complicates the "Single Command Execution" goal. |
+| **RabbitMQ** | Heavier resource footprint (Erlang VM). While feature-rich, the management of exchanges/bindings adds unnecessary complexity for a simple file-tracking buffer. |
+| **Redis (Pub/Sub)** | Lacks native persistence and "replay" capabilities in its standard Pub/Sub mode. While Redis Streams exist, NATS JetStream offers a more robust "store-and-forward" model for this specific use case. |
+| **Direct File Polling** | Without a broker, Airflow would need to scan the disk constantly. This is brittle and risks missing files if the naming convention or timestamps have minor inconsistencies during high-frequency generation. |
+
+**Consequences:**
+* **Lightweight Footprint:** The NATS container will typically use < 50MB of RAM, leaving more resources for ML model training and Airflow workers.
+* **Decoupling:** The Data Generator doesn't need to know if Airflow is running; it simply publishes "File Created" events to the NATS stream.
+* **Observability:** We can use the `nats` CLI or a simple UI to inspect the buffer, making debugging of the ingestion pipeline significantly easier during development.
+* **State Management:** Airflow will use a "Pull Consumer" pattern, fetching the next available file metadata from NATS based on the stream's sequence, ensuring no file is processed twice or skipped.
+
+---
