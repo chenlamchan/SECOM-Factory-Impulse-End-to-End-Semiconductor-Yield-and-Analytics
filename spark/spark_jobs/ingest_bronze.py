@@ -4,18 +4,21 @@ import logging
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp, lit, input_file_name, to_date
+from common.config import ServiceConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+config = ServiceConfig()
+
 # Constants
-MINIO_ENDPOINT = "http://minio:9000"
-MINIO_ACCESS_KEY = "minio_admin" 
-MINIO_SECRET_KEY = "minio_password"
-CATALOG_URI = "jdbc:postgresql://postgres-catalog:5432/data_catalog"
-CATALOG_USER = "airflow"
-CATALOG_PASSWORD = "airflow_password"
-S3_WAREHOUSE_PATH = "s3a://data-lake/warehouse"
+MINIO_ENDPOINT = config.minio_endpoint
+MINIO_ACCESS_KEY = config.minio_access_key
+MINIO_SECRET_KEY = config.minio_secret_key
+CATALOG_URI = config.catalog_uri
+CATALOG_USER = config.catalog_user
+CATALOG_PASSWORD = config.catalog_password
+S3_WAREHOUSE_PATH = config.minio_warehouse
 
 def create_spark_session() -> SparkSession:
     """Configures Spark with Iceberg and MinIO capabilities."""
