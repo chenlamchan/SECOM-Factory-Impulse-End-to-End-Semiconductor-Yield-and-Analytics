@@ -3,5 +3,4 @@ pydantic
 pydantic-settings
 apache-airflow-providers-apache-spark
 pyspark==3.5.3
-dbt-core
-dbt-spark[PyHive]
+dbt-trino

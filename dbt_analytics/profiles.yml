@@ -2,10 +2,10 @@ secom_analytics:
   target: dev
   outputs:
     dev:
-      type: spark
-      method: thrift
-      host: localhost
-      port: 10000
-      user: dbt_user
-      schema: silver
-      threads: 4
+      type: trino
+      method: none
+      host: trino
+      port: 8080
+      user: admin
+      catalog: secom_catalog
+      schema: default

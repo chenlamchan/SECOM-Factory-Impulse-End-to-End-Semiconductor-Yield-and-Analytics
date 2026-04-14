@@ -26,7 +26,7 @@ SELECT
     ) AS missing_sensor_count,
 
     -- Include all raw features for downstream selection
-    {{ dbt_utils.star(from=ref('raw_bronze'), except=["observation_id", "Time", "Pass_Fail", "ingestion_timestamp", "ingestion_date", "source_file", "pipeline_version", "event_date"]) }},
+    {{ dbt_utils.star(from=source('secom_catalog','secom_data'), except=["observation_id", "Time", "Pass_Fail", "ingestion_timestamp", "ingestion_date", "source_file", "pipeline_version", "event_date"]) }},
     
     -- Lineage
     ingestion_timestamp AS bronze_ingested_at,

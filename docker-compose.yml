@@ -272,32 +272,43 @@ services:
       retries: 3
 
 # ============================================================================
-# SQL Engine for dbt (Spark Thrift Server)
+# Trino (SQL Engine for dbt & BI)
 # ============================================================================
-  spark-thrift-server:
+  trino:
     build:
-      context: ./spark
+      context: ./services/trino
       dockerfile: Dockerfile
-    container_name: spark-thrift-server
-    depends_on:
-      - spark-master
-      - postgres
+    hostname: trino
+    container_name: trino
     ports:
-      - "10000:10000" # JDBC Port for dbt
-      - "4040:4040"   # Spark UI
-    environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
-      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
-      AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+      - "8090:8080" # Trino UI
+    depends_on:
+      - minio
     secrets:
-      - minio_user
       - minio_password
+      - minio_user
       - airflow_db_password
-    volumes:
-      - ./infrastructures/spark-thrift/start-thrift.sh:/start-thrift.sh:ro
-    command: ["/bin/bash", "/start-thrift.sh"]
+    environment:
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/minio_user
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD: /run/secrets/airflow_db_password
+    command: >
+      bash -c "
+        # 1. Read secrets from files and export them as env vars
+        #    Trino's S3 connector automatically reads these specific vars.
+        export AWS_ACCESS_KEY_ID=$(cat /run/secrets/minio_user)
+        export AWS_SECRET_ACCESS_KEY=$$(cat /run/secrets/minio_password)
+        export AIRFLOW_DB_PASSWORD=$$(cat /run/secrets/airflow_db_password)
+
+        # 2. Run the original Trino startup command
+        /usr/lib/trino/bin/run-trino
+      "
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 # ============================================================================
 # Orchestration (Apache Airflow)
@@ -410,7 +421,6 @@ secrets:
 
   postgres_user:
     file: ./secrets/postgres_user.txt
-  
   postgres_password:
     file: ./secrets/postgres_password.txt
 

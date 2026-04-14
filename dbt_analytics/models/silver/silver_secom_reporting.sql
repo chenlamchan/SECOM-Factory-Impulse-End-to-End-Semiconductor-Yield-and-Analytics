@@ -1,6 +1,9 @@
 {{ config(
     materialized='table',
-    partition_by=['wafer_status']
+    properties={
+        "partitioning": ARRAY['wafer_status']
+    }
+    
 ) }}
 
 WITH staged_data AS (
