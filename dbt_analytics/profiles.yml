@@ -1,0 +1,11 @@
+secom_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      method: none
+      host: trino
+      port: 8080
+      user: admin
+      catalog: secom_catalog
+      schema: default

@@ -1,0 +1,6 @@
+nats-py==2.14.0
+pydantic==2.5.3
+pydantic-settings==2.2.1
+apache-airflow-providers-apache-spark==4.7.0
+apache-airflow-providers-docker==3.9.1
+docker==7.0.0

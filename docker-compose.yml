@@ -124,6 +124,45 @@ services:
       - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
 
   # ==========================================================================
+  # Postgres (Catalog & Metadata)
+  # ==========================================================================
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    env_file: .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+      - postgres_user
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U $(cat /run/secrets/postgres_user) -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  postgres-init:
+    image: postgres:15-alpine
+    container_name: postgres-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./infrastructures/postgres/postgres-init.sh:/init-postgres.sh
+    secrets:
+      - postgres_user
+      - postgres_password
+      - airflow_db_password
+    env_file: .env
+    entrypoint: ['/bin/sh','/init-postgres.sh']
+
+  # ==========================================================================
   # Nats (As message broker - like AWS SQS)
   # ==========================================================================
   nats:
@@ -191,6 +230,191 @@ services:
     command: streamlit run streamlit_app.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
+# Spark (Processing)
+# ============================================================================
+  spark-master:
+      image: apache/spark:3.5.3-python3
+      container_name: spark-master
+      command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      ports:
+        - "8080:8080"  # Spark UI
+        - "7077:7077"  # Spark Master
+      volumes:
+        - spark_master_data:/opt/spark/data
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark-worker
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+    secrets:
+      - minio_user
+      - minio_password
+    volumes:
+      - spark_worker_data:/opt/spark/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ============================================================================
+# dbt
+# ============================================================================
+  dbt:
+    build:
+      context: ./services/dbt
+      dockerfile: Dockerfile
+    container_name: dbt
+    image: end-to-end-semiconductor-yield-and-analytics-dbt:latest
+    volumes:
+      - ./dbt_analytics:/dbt
+    profiles:
+      - dbt
+
+# ============================================================================
+# Trino (SQL Engine for dbt & BI)
+# ============================================================================
+  trino:
+    build:
+      context: ./services/trino
+      dockerfile: Dockerfile
+    hostname: trino
+    container_name: trino
+    ports:
+      - "8090:8080" # Trino UI
+    depends_on:
+      - minio
+    secrets:
+      - minio_password
+      - minio_user
+      - airflow_db_password
+    environment:
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/minio_user
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD: /run/secrets/airflow_db_password
+    env_file: .env
+    command: >
+      bash -c "
+        # 1. Read secrets from files and export them as env vars
+        #    Trino's S3 connector automatically reads these specific vars.
+        export AWS_ACCESS_KEY_ID=$(cat /run/secrets/minio_user)
+        export AWS_SECRET_ACCESS_KEY=$$(cat /run/secrets/minio_password)
+        export AIRFLOW_DB_PASSWORD=$$(cat /run/secrets/airflow_db_password)
+
+        # 2. Run the original Trino startup command
+        /usr/lib/trino/bin/run-trino
+      "
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+# ============================================================================
+# Orchestration (Apache Airflow)
+# ============================================================================
+  airflow-init:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-init
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    volumes:
+      - ./infrastructures/airflow/airflow-init.sh:/airflow-init.sh:ro
+    secrets:
+      - airflow_admin_password
+      - airflow_db_password
+    entrypoint: ['/bin/bash', "/airflow-init.sh"]
+    
+  airflow-webserver:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+    ports:
+      - "8081:8080" # Mapped to 8081 to avoid conflict with Spark UI
+    env_file: .env
+    user: "50000:${DOCKER_GID}"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      SPARK_HOME: /opt/spark
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./spark/spark_jobs:/opt/airflow/spark_jobs
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - airflow_db_password
+      - minio_user
+      - minio_password
+    entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
+    command: webserver
+
+  airflow-scheduler:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+    env_file: .env
+    user: "50000:${DOCKER_GID}"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./spark/spark_jobs:/opt/airflow/spark_jobs
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - airflow_db_password
+      - minio_user
+      - minio_password
+    entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
+    command: scheduler
+
+# ============================================================================
 # Persistent Volumes
 # ============================================================================
 volumes:
@@ -200,6 +424,9 @@ volumes:
   grafana_data:
   generator_data:
   nats-data:
+  postgres_data:
+  spark_master_data:
+  spark_worker_data:
 
 # ============================================================================
 # Docker Secrets
@@ -212,3 +439,13 @@ secrets:
 
   grafana_password:
     file: ./secrets/grafana_password.txt
+
+  postgres_user:
+    file: ./secrets/postgres_user.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
+  airflow_admin_password:
+    file: ./secrets/airflow_admin_password.txt
+  airflow_db_password:
+    file: ./secrets/airflow_db_password.txt

@@ -1,0 +1,14 @@
+name: 'secom_analytics'
+version: '0.1.0'
+config-version: 2
+profile: 'secom_analytics'
+
+models:
+  secom_analytics:
+    staging:
+      +materialized: ephemeral
+      +schema: bronze
+    silver:
+      +materialized: table
+      +schema: silver
+      +file_format: parquet
