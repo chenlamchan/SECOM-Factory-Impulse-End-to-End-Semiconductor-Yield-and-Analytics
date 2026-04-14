@@ -272,6 +272,34 @@ services:
       retries: 3
 
 # ============================================================================
+# SQL Engine for dbt (Spark Thrift Server)
+# ============================================================================
+  spark-thrift-server:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark-thrift-server
+    depends_on:
+      - spark-master
+      - postgres
+    ports:
+      - "10000:10000" # JDBC Port for dbt
+      - "4040:4040"   # Spark UI
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+    secrets:
+      - minio_user
+      - minio_password
+      - airflow_db_password
+    volumes:
+      - ./infrastructures/spark-thrift/start-thrift.sh:/start-thrift.sh:ro
+    command: ["/bin/bash", "/start-thrift.sh"]
+
+# ============================================================================
 # Orchestration (Apache Airflow)
 # ============================================================================
   airflow-init:
