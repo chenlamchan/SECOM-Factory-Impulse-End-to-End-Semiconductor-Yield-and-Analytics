@@ -343,6 +343,7 @@ services:
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
     secrets:
       - airflow_db_password
       - minio_user
@@ -373,6 +374,7 @@ services:
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
     secrets:
       - airflow_db_password
       - minio_user

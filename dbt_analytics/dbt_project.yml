@@ -1,0 +1,12 @@
+name: 'secom_analytics'
+version: '0.1.0'
+config-version: 1
+profile: 'secom_analytics'
+
+models:
+  secom_analytics:
+    staging:
+      materialized: view
+    silver:
+      materialized: table
+      file_format: iceberg

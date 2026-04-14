@@ -139,4 +139,11 @@ with DAG(
         }
     )
 
-    pull_nats_batches >> ingest_to_bronze
+    build_silver_reporting = BashOperator(
+        task_id='dbt_run_silver_reporting',
+        # Assuming the airflow container has the dbt_analytics folder mounted
+        bash_command='cd /opt/airflow/dbt_analytics && dbt run --profiles-dir . --select models/staging models/silver',
+        trigger_rule='all_success'
+    )
+
+    pull_nats_batches >> ingest_to_bronze >> build_silver_reporting
