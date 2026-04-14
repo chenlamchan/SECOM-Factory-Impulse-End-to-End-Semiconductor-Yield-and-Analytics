@@ -5,7 +5,7 @@ from pathlib import Path
 
 class ServiceConfig(BaseSettings):
     minio_endpoint:str = Field(default="http://minio:9000")
-    minio_warehouse:str = Field(default="s3://data-lake/warehouse")
+    minio_warehouse:str = Field(default="s3a://data-lake/warehouse")
     minio_access_key_file:str
     minio_secret_key_file:str
 
@@ -23,7 +23,7 @@ class ServiceConfig(BaseSettings):
 
     @property
     def catalog_uri(self):
-        return f"jdbc:postgresql://postgres:5432/{catalog_name}"
+        return f"jdbc:postgresql://postgres:5432/{self.catalog_name}"
 
     @property
     def catalog_password(self):

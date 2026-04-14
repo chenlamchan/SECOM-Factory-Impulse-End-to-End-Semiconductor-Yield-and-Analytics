@@ -11,7 +11,7 @@ airflow db migrate
 echo "Creating Airflow Admin user..."
 # Read the admin password from the mounted Docker secret
 if [ -f "/run/secrets/airflow_admin_password" ]; then
-    ADMIN_PASSWORD=$(cat /run/secrets/airflow_admin_password)
+    ADMIN_PASSWORD=$(cat /run/secrets/airflow_admin_password | tr -d '\n\r ')
 else
     echo "ERROR: Secret /run/secrets/airflow_admin_password not found!"
     exit 1
@@ -21,12 +21,31 @@ fi
 ADMIN_USER=${AIRFLOW_ADMIN_USER}
 ADMIN_EMAIL=${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
 
-airflow users create \
-  --role Admin \
-  --username "$ADMIN_USER" \
-  --password "$ADMIN_PASSWORD" \
-  --email "$ADMIN_EMAIL" \
-  --firstname Admin \
-  --lastname User
+# Create user ONLY if it doesn't exist
+if ! airflow users list | grep -q "$ADMIN_USER"; then
+    airflow users create \
+      --role Admin \
+      --username "$ADMIN_USER" \
+      --password "$ADMIN_PASSWORD" \
+      --email "$ADMIN_EMAIL" \
+      --firstname Admin \
+      --lastname User
+else
+    echo "Admin user already exists, skipping creation."
+fi
+
+create_spark_conn() {
+  airflow connections add 'spark_default' \
+    --conn-type 'spark' \
+    --conn-host 'spark://spark-master' \
+    --conn-port '7077' \
+    --conn-extra '{
+      "queue": "default",
+      "spark-binary": "spark-submit",
+      "deploy-mode": "client"
+    }'
+}
+
+airflow connections get spark_default > /dev/null 2>&1 || create_spark_conn
 
 echo "Airflow initialization complete!"

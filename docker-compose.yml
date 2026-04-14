@@ -258,6 +258,11 @@ services:
     environment:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+    secrets:
+      - minio_user
+      - minio_password
     volumes:
       - spark_worker_data:/opt/spark/data
     healthcheck:
@@ -279,7 +284,7 @@ services:
         condition: service_completed_successfully
     env_file: .env
     environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
     volumes:
       - ./infrastructures/airflow/airflow-init.sh:/airflow-init.sh:ro
     secrets:
@@ -295,18 +300,25 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
     ports:
       - "8081:8080" # Mapped to 8081 to avoid conflict with Spark UI
     env_file: .env
     environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      SPARK_HOME: /opt/spark
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./spark/spark_jobs:/opt/airflow/spark_jobs
     secrets:
       - airflow_db_password
+      - minio_user
+      - minio_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: webserver
 
@@ -318,16 +330,25 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
     env_file: .env
     environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./spark/spark_jobs:/opt/airflow/spark_jobs
     secrets:
       - airflow_db_password
+      - minio_user
+      - minio_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: scheduler
 
