@@ -279,6 +279,7 @@ services:
       context: ./services/dbt
       dockerfile: Dockerfile
     container_name: dbt
+    image: end-to-end-semiconductor-yield-and-analytics-dbt:latest
     volumes:
       - ./dbt_analytics:/dbt
     profiles:
@@ -305,6 +306,7 @@ services:
       AWS_ACCESS_KEY_ID_FILE: /run/secrets/minio_user
       AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
       AIRFLOW_DB_PASSWORD: /run/secrets/airflow_db_password
+    env_file: .env
     command: >
       bash -c "
         # 1. Read secrets from files and export them as env vars
@@ -357,18 +359,20 @@ services:
     ports:
       - "8081:8080" # Mapped to 8081 to avoid conflict with Spark UI
     env_file: .env
+    user: "50000:${DOCKER_GID}"
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: False
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
-      DBT_PROJECT_PATH: /absolute/path/on/host/dbt_analytics
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
     secrets:
       - airflow_db_password
       - minio_user
@@ -387,6 +391,7 @@ services:
       spark-master:
         condition: service_healthy
     env_file: .env
+    user: "50000:${DOCKER_GID}"
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: False
@@ -401,6 +406,7 @@ services:
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
     secrets:
       - airflow_db_password
       - minio_user

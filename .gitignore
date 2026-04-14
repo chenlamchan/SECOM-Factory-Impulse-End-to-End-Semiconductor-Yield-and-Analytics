@@ -13,3 +13,18 @@ __pycache__/
 # Ignore environment variables
 .env
 /secrets
+
+# dbt-specific files
+target/
+dbt_packages/
+logs/
+*.log
+
+# dbt artifacts & state
+state/
+
+# Environment and user-specific configurations
+.user.yml
+
+# Lock files and metadata
+package-lock.yml

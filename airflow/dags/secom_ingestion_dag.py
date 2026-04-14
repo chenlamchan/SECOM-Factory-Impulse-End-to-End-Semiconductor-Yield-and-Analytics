@@ -147,8 +147,8 @@ with DAG(
 
     build_silver_reporting = DockerOperator(
         task_id='dbt_run_silver_reporting',
-        image='dbt:latest',
-        command='dbt run --profiles-dir . --select models/staging models/silver',
+        image='end-to-end-semiconductor-yield-and-analytics-dbt:latest',
+        command='bash -c "dbt deps && dbt run --profiles-dir . --select models/staging models/silver"',
         working_dir='/dbt',
         mounts=[
             Mount(
