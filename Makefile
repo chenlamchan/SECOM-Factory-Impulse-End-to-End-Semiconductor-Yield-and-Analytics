@@ -21,7 +21,7 @@ help: ## Display this help screen
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # 4. DOCKER COMMANDS
-.PHONY: build up down logs
+.PHONY: build up down logs build-up-one
 build: ## Rebuild all custom application images (ingestion, processing)
 	docker compose --progress=plain -f $(COMPOSE_FILE) -p $(PROJECT_NAME) build 
 
@@ -33,6 +33,13 @@ down: ## Stop and remove all services and networks
 
 logs: ## Follow logs for all services
 	docker compose -f $(COMPOSE_FILE) -p $(PROJECT_NAME) logs -f
+
+build-up-one: ## Build and start a single service
+	@if [ -z "$$service" ]; then \
+	    echo "Error: Must specify service. Usage: make up-one-build service=<service_name>"; \
+	    exit 1; \
+	fi
+	docker compose -f $(COMPOSE_FILE) -p $(PROJECT_NAME) up --build -d $(service)
 
 # 5. UTILITIES & CLEANUP
 .PHONY: clean prune

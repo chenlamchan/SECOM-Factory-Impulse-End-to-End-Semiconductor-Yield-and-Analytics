@@ -32,8 +32,9 @@ USER airflow
 COPY requirements.txt /tmp/requirements.txt
 
 RUN --mount=type=cache,target=/home/airflow/.cache/pip,sharing=locked \
-    pip install --upgrade pip && \
-    pip install --no-cache-dir -r /tmp/requirements.txt
+    pip install --no-cache-dir \
+        --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.8.1/constraints-3.11.txt" \
+        -r /tmp/requirements.txt
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="$SPARK_HOME/bin:$PATH"

@@ -272,6 +272,19 @@ services:
       retries: 3
 
 # ============================================================================
+# dbt
+# ============================================================================
+  dbt:
+    build:
+      context: ./services/dbt
+      dockerfile: Dockerfile
+    container_name: dbt
+    volumes:
+      - ./dbt_analytics:/dbt
+    profiles:
+      - dbt
+
+# ============================================================================
 # Trino (SQL Engine for dbt & BI)
 # ============================================================================
   trino:
@@ -349,6 +362,7 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: False
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
+      DBT_PROJECT_PATH: /absolute/path/on/host/dbt_analytics
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -380,6 +394,7 @@ services:
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
       AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins

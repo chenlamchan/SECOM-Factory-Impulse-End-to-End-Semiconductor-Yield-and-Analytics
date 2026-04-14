@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 import logging
@@ -6,10 +7,14 @@ from nats.errors import TimeoutError
 from nats.js.api import ConsumerConfig, AckPolicy
 from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.providers.docker.operators.docker import DockerOperator
+from docker.types import Mount
 from airflow.operators.python import ShortCircuitOperator, PythonOperator
 from airflow.operators.bash import BashOperator
 from datetime import datetime, timedelta
 from common.config import ServiceConfig
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +26,7 @@ STREAM_NAME = config.nats_stream_name
 SUBJECT = config.nats_subject
 CONSUMER_NAME = "airflow_bronze_ingestion_consumer"
 BATCH_THRESHOLD = 5
+DBT_PROJECT_PATH = os.environ.get('DBT_PROJECT_PATH', '/opt/airflow/dbt_analytics')
 
 async def _pull_nats_messages(**context):
     """Async worker to connect to NATS JetStream and pull batch paths."""
@@ -139,11 +145,21 @@ with DAG(
         }
     )
 
-    build_silver_reporting = BashOperator(
+    build_silver_reporting = DockerOperator(
         task_id='dbt_run_silver_reporting',
-        # Assuming the airflow container has the dbt_analytics folder mounted
-        bash_command='cd /opt/airflow/dbt_analytics && dbt run --profiles-dir . --select models/staging models/silver',
-        trigger_rule='all_success'
+        image='dbt:latest',
+        command='dbt run --profiles-dir . --select models/staging models/silver',
+        working_dir='/dbt',
+        mounts=[
+            Mount(
+                source=DBT_PROJECT_PATH,  # must be absolute path
+                target='/dbt',
+                type='bind'
+            )
+        ],
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',  # same network as trino
+        auto_remove=True,
+        docker_url='unix://var/run/docker.sock',
     )
 
     pull_nats_batches >> ingest_to_bronze >> build_silver_reporting
