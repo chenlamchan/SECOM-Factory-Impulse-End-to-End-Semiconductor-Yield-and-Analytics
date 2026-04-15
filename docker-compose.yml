@@ -297,7 +297,10 @@ services:
     ports:
       - "8090:8080" # Trino UI
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     secrets:
       - minio_password
       - minio_user
@@ -324,6 +327,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    restart: on-failure
 
 # ============================================================================
 # Orchestration (Apache Airflow)
@@ -363,6 +367,8 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: False
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
@@ -379,6 +385,7 @@ services:
       - minio_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: webserver
+    restart: on-failure
 
   airflow-scheduler:
     build:
@@ -395,6 +402,8 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: False
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
@@ -413,6 +422,7 @@ services:
       - minio_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: scheduler
+    restart: on-failure
 
 # ============================================================================
 # Persistent Volumes
