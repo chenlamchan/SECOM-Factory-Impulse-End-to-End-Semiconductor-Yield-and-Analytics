@@ -12,3 +12,7 @@ models:
       +materialized: table
       +schema: silver
       +file_format: parquet
+    gold:
+      +materialized: table
+      +schema: gold
+      +file_format: parquet

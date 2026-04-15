@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: silver_secom_reporting
+    description: "Cleaned and typed SECOM data. Nulls preserved."
+    columns:
+      - name: observation_id
+        tests:
+          - unique
+          - not_null
+      - name: test_outcome
+        tests:
+          - accepted_values:
+              values: ['Pass', 'Fail', 'Unknown']
+
+  - name: gold_daily_yield_metrics
+    description: "Daily aggregated manufacturing KPIs for executive dashboards."
+    columns:
+      - name: process_date
+        tests:
+          - unique
+          - not_null
+      - name: yield_percentage
+        description: "Must be between 0.00 and 100.00"
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100
+      - name: total_wafers_tested
+        tests:
+          - not_null

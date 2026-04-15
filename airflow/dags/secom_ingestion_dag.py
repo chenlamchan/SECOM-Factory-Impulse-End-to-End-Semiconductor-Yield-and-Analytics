@@ -99,7 +99,7 @@ default_args = {
 }
 
 with DAG(
-    'secom_bronze_ingestion_event_driven',
+    'secom_ingestion_processsing_event_driven',
     default_args=default_args,
     description='Event-driven ingestion from NATS to Iceberg Bronze',
     schedule_interval=timedelta(minutes=1), # Wakes up every 5 mins to check queue
@@ -145,10 +145,10 @@ with DAG(
         }
     )
 
-    build_silver_reporting = DockerOperator(
-        task_id='dbt_run_silver_reporting',
+    build_silver_gold_reporting = DockerOperator(
+        task_id='dbt_run_silver_gold_reporting',
         image='end-to-end-semiconductor-yield-and-analytics-dbt:latest',
-        command='bash -c "dbt deps && dbt run --profiles-dir . --select models/staging models/silver"',
+        command='bash -c "dbt deps && dbt run --profiles-dir . --select models/staging models/silver models/gold"',
         working_dir='/dbt',
         mounts=[
             Mount(
@@ -162,4 +162,4 @@ with DAG(
         docker_url='unix://var/run/docker.sock',
     )
 
-    pull_nats_batches >> ingest_to_bronze >> build_silver_reporting
+    pull_nats_batches >> ingest_to_bronze >> build_silver_gold_reporting 
