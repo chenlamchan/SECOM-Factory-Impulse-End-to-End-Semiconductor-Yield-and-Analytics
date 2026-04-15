@@ -36,6 +36,17 @@ def render_realtime_spc(ref_limits):
         fig.add_hline(y=analysis['ucl'], line_dash="dash", line_color="red", annotation_text="UCL")
         fig.add_hline(y=analysis['mean'], line_color="green", annotation_text="Mean")
         fig.add_hline(y=analysis['lcl'], line_dash="dash", line_color="red", annotation_text="LCL")
+        
+        # --- ADD THIS BLOCK TO STOP THE JUMPING ---
+        # Calculate a nice buffer so the lines aren't touching the edge of the screen
+        y_buffer = (analysis['ucl'] - analysis['lcl']) * 0.2 
+        
+        fig.update_layout(
+            uirevision="constant_spc_view", 
+            yaxis_range=[analysis['lcl'] - y_buffer, analysis['ucl'] + y_buffer],
+            transition_duration=500 
+        )
+
         st.plotly_chart(fig, use_container_width=True)
         
     else:
