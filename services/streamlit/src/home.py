@@ -1,15 +1,26 @@
 import streamlit as st
+from common.utils import (
+    apply_page_config, badge,
+    PLOTLY_LAYOUT, TEAL, AMBER, RED, CORAL, GRAY,
+)
 
-st.set_page_config(page_title="SECOM Platform", layout="wide", page_icon="🏭")
+apply_page_config("Executive Overview", "🏭")
+ 
+st.title("🏭 SECOM Manufacturing Command Center")
+st.caption(f"Last render: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-st.title("🏭 SECOM Integrated Manufacturing Hub")
-
-st.markdown("""
-## Welcome to the Central Command
-Select a module from the sidebar to begin:
-
-1.  **Simulator & Validation**: Configure the data daemon and monitor drift.
-2.  **Manufacturing Command Center**: View executive KPIs and Real-Time SPC charts.
-""")
-
-st.info("The navigation on the left allows you to switch between different parts of the pipeline.")
+# ------------------------------------------------------------------
+# Sidebar navigation hint
+# ------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### Navigation")
+    st.markdown("""
+    | Page | Purpose |
+    |------|---------|
+    | Yield Analytics | Trends, Pareto, calendar heatmap |
+    | SPC Monitor | Nelson rules, Cp/Cpk |
+    | OEE Equipment | Line efficiency breakdown |
+    | Failure Analysis | Pareto, correlation heatmap |
+    | ML Insights | Predictive yield, drift |
+    | Simulator | Multi-line generator control |
+    """)
