@@ -52,10 +52,13 @@ _CSS = """
     padding: 1rem 1.25rem;
 }
 [data-testid="stMetricLabel"] { color: #8B949E; font-size: 12px; }
-[data-testid="stMetricValue"] { font-size: 26px; font-weight: 500; }
+/* ADDED COLOR HERE -> */
+[data-testid="stMetricValue"] { color: #E6EDF3; font-size: 26px; font-weight: 500; } 
  
 /* Sidebar */
 [data-testid="stSidebar"] { background: #0D1117; border-right: 1px solid #21262D; }
+/* ADDED SIDEBAR TEXT OVERRIDE HERE -> */
+[data-testid="stSidebar"] * { color: #C9D1D9 !important; }
  
 /* Tabs */
 [data-testid="stTabs"] button[aria-selected="true"] {
@@ -64,8 +67,14 @@ _CSS = """
 }
  
 /* DataFrames */
-[data-testid="stDataFrame"] { border: 1px solid #30363D; border-radius: 8px; }
- 
+/* ADDED BACKGROUND AND TEXT COLOR HERE -> */
+[data-testid="stDataFrame"] { 
+    background: #0D1117; 
+    border: 1px solid #30363D; 
+    border-radius: 8px; 
+}
+[data-testid="stDataFrame"] * { color: #E6EDF3; }
+
 /* Status badges */
 .badge-ok    { background:#0F6E56; color:#E1F5EE; padding:2px 8px; border-radius:4px; font-size:12px; }
 .badge-warn  { background:#854F0B; color:#FAEEDA; padding:2px 8px; border-radius:4px; font-size:12px; }

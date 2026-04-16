@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.figure_factory as ff
 import streamlit as st
 from scipy.stats import wasserstein_distance
 
@@ -269,21 +270,31 @@ with tab_validation:
         # Distribution comparison for top-drifted sensor
         if len(drift_result) > 0:
             top_feat_raw = drift_result.iloc[0]["Feature"].replace("Sensor ", "")
-            st.markdown(f"#### Distribution comparison — {drift_result.iloc[0]['Feature']}")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Histogram(
-                x=baseline_df[top_feat_raw].dropna(), name="Baseline",
-                marker_color=GRAY, opacity=0.6, nbinsx=40,
-            ))
-            fig2.add_trace(go.Histogram(
-                x=latest_df[top_feat_raw].dropna(), name="Generated",
-                marker_color=TEAL, opacity=0.7, nbinsx=40,
-            ))
-            fig2.update_layout(
-                **PLOTLY_LAYOUT, barmode="overlay", height=300,
-                xaxis_title=drift_result.iloc[0]["Feature"], yaxis_title="Count",
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown(f"#### Distribution comparison for Top Drifted — {drift_result.iloc[0]['Feature']}")
+            
+            base_data = baseline_df[top_feat_raw].dropna()
+            latest_data = latest_df[top_feat_raw].dropna()
+
+            # Prevent crash if a sensor is completely flat/empty
+            if len(base_data) > 1 and len(latest_data) > 1:
+                # create_distplot generates a smooth KDE line
+                fig2 = ff.create_distplot(
+                    hist_data=[base_data, latest_data],
+                    group_labels=["Baseline", "Generated"],
+                    colors=[GRAY, TEAL],
+                    show_hist=False, # Hides the underlying bars
+                    show_rug=False   # Hides the bottom tick marks
+                )
+                
+                fig2.update_layout(
+                    **PLOTLY_LAYOUT, 
+                    height=300,
+                    xaxis_title=drift_result.iloc[0]["Feature"], 
+                    yaxis_title="Density",
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("Not enough variance to plot a distribution curve.")
 
 # ---------------------------------------------------------------------------
 # tab_history

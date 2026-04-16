@@ -31,6 +31,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY ./src/ ./
+COPY ./.streamlit/ ./.streamlit/
 
 # Make sure scripts are on PATH
 ENV PATH=/root/.local/bin:$PATH
