@@ -54,6 +54,11 @@ class LineConfig(BaseSettings):
     fault_probability: float = Field(default=0.05,ge=0) # 5% chance per cycle
     fault_duration_seconds: int = Field(default=60, ge=0)
 
+    # Persistent Runtime State, Per-line date pointer so each line advances independently
+    date_ptr: int = Field(default=0, description="Pointer to the current dataset date index")
+    lot_counter: int = Field(default=0, description="Sequential lot ID counter")
+    year_offset: int = Field(default=0, description="Years to add to base data once unique dates deplete")
+
 def get_default_lines() -> Dict[str, LineConfig]:
     return  {
         "LINE_A": LineConfig(line_id="LINE_A", tester_id="TST-01", is_running=False),
