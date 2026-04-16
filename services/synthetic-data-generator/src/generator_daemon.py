@@ -62,9 +62,9 @@ class DataGeneratorDaemon:
         self.baseline_df['Date_Block'] = self.baseline_df['Time'].dt.date
         self.unique_dates = sorted(self.baseline_df['Date_Block'].unique())
         
-        # Per-line date pointer so each line advances independently
-        self._date_ptrs: dict[str, int] = {}
-        self._lot_counters: dict[str, int] = {}
+        # Dictionary to track fault cooldowns independently and next run time per line
+        self.fault_cooldowns: dict[str, datetime.datetime] = {}
+        self.next_run_times: dict[str, datetime.datetime] = {}
 
         numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
 
@@ -107,16 +107,25 @@ class DataGeneratorDaemon:
             self.nc = None
             self.js = None
 
-    def _next_day_block(self, line_id:str) -> pd.DataFrame:
+    def _next_day_block(self, lc:LineConfig) -> pd.DataFrame:
         """Samples all sequential rows for a specific day to preserve time-series behavior."""
-        ptr = self._date_ptrs.get(line_id, 0)
-        target_date = self.unique_dates[ptr % len(self.unique_dates)] # Safeguarding the Target Date, belt-and-suspenders safety net
-        self._date_ptrs[line_id] = (ptr+1) % len(self.unique_dates) # Advance the index, loop back to 0 if we hit the end of the dataset
-
         if not self.unique_dates:
             return self.baseline_df.copy() # Fallback if dates couldn't be parsed
+
+        target_date = self.unique_dates[lc.date_ptr % len(self.unique_dates)] # Safeguarding the Target Date, belt-and-suspenders safety net
+        lc.date_ptr += 1
+
+        if lc.date_ptr >= len(self.unique_dates):
+            lc.date_ptr = 0
+            lc.year_offset += 1
         
-        return self.baseline_df[self.baseline_df["Date_Block"] == target_date].copy().drop(columns=["Date_Block"])
+        df = self.baseline_df[self.baseline_df["Date_Block"] == target_date].copy().drop(columns=["Date_Block"])
+        
+        if lc.year_offset > 0:
+            df['Time'] = df['Time'] + pd.DateOffset(years=lc.year_offset)
+        
+        
+        return df
 
     def _apply_mutations(self, df: pd.DataFrame, lc: LineConfig) -> pd.DataFrame:
         """Applies controlled jitter and targeted sigma shifts."""
@@ -140,29 +149,36 @@ class DataGeneratorDaemon:
 
         return df
 
-    def _next_lot_id(self, line_id:str) -> str:
-        n = self._lot_counters.get(line_id, 0)
-        self._lot_counters[line_id] = n + 1 
-        return f"{line_id}-LOT-{n:05d}"
+    def _next_lot_id(self, lc:LineConfig) -> str:
+        lc.lot_counter += 1
+        return f"{lc.line_id}-LOT-{lc.lot_counter:05d}"
 
     async def run_line_cycle(self, line_id: str, lc: LineConfig) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
 
+        next_run = self.next_run_times.get(line_id)
+        if next_run and now < next_run:
+            return
+
+        cooldown_end = self.fault_cooldowns.get(line_id)
+        if cooldown_end and now < cooldown_end:
+            logger.debug("[%s] down due to fault (wakes at %s)", line_id, cooldown_end.strftime('%H:%M:%S'))
+            return
+
         if lc.fault_injection_enabled and random.random() < lc.fault_probability:
             logger.warning("[%s] Fault injected — pausing for %ds", line_id, lc.fault_duration_seconds)
             self.state_store.log_event(line_id, "FAULT", {"duration_s": lc.fault_duration_seconds})
-            await asyncio.sleep(lc.fault_duration_seconds)
-
+            self.fault_cooldowns[line_id] = now + datetime.timedelta(seconds=lc.fault_duration_seconds)
             return 
 
-        batch_df = self._next_day_block(line_id)
+        batch_df = self._next_day_block(lc)
         mutated_df = self._apply_mutations(batch_df, lc)
 
         if len(batch_df) > lc.batch_size:
             # Sample N rows and sort chronologically
             mutated_df = mutated_df.sample(n=lc.batch_size).sort_values('Time')
         
-        lot_id = self._next_lot_id(line_id)
+        lot_id = self._next_lot_id(lc)
         shift = _current_shift(mutated_df['Time'].dt.hour.iloc[0])
         iso_ts = now.isoformat()
 
@@ -207,6 +223,7 @@ class DataGeneratorDaemon:
    
         await self.publish_metadata(payload)  
         self.state_store.log_event(line_id, "BATCH", {"lot_id": lot_id, "wafers": len(mutated_df)})
+        self.next_run_times[line_id] = now + datetime.timedelta(seconds=lc.generation_interval_seconds)
     
     async def publish_metadata(self, payload: dict) -> None:
         """Publishes the generation event payload to NATS."""
@@ -240,12 +257,9 @@ class DataGeneratorDaemon:
                         *tasks, 
                         # return_exceptions=True,   # Comment for Fail Fast
                         )
-
-                min_interval = min(
-                    (lc.generation_interval_seconds for lc in config.lines.values() if lc.is_running),
-                    default=5,
-                )
-                await asyncio.sleep(min_interval)
+                
+                self.state_store.update_config(config)
+                await asyncio.sleep(1)
                 
         finally:
             if self.nc and not self.nc.is_closed:
