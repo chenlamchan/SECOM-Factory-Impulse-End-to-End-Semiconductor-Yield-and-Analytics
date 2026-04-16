@@ -7,6 +7,7 @@ import pyarrow.dataset as ds
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.exceptions import NoSuchTableError, NamespaceAlreadyExistsError
 from datetime import datetime
+from datetime import timezone
 from config import ServiceConfig
 
 config = ServiceConfig()
@@ -79,7 +80,7 @@ def main():
     # 3. Append Metadata (PyArrow compute functions)
     # E.g., adding ingestion timestamps
     num_rows = final_table.num_rows
-    ingestion_ts = [datetime.now(datetime.timezone.utc)] * num_rows
+    ingestion_ts = [datetime.now(timezone.utc)] * num_rows
     final_table = final_table.append_column("ingestion_timestamp", pa.array(ingestion_ts, pa.timestamp('us')))
     final_table = final_table.append_column("pipeline_version", pa.array(["0.1.0-pyiceberg"] * num_rows))
 
