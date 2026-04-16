@@ -9,6 +9,7 @@ against the baseline SECOM dataset.
 """
 
 import json
+import time
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -124,6 +125,7 @@ with tab_control:
         new_config = SimulationConfig(lines=updated_lines)
         store.update_config(new_config)
         st.toast("✅ Configuration saved — daemon will update within one cycle.")
+        time.sleep(1.5)
         st.rerun()
 
     if col_stop.button("⛔ Stop all lines", use_container_width=True):
@@ -131,6 +133,8 @@ with tab_control:
             lc.is_running = False
         store.update_config(SimulationConfig(lines=updated_lines))
         st.toast("All lines stopped.")
+        time.sleep()
+        time.sleep(1.5)
         st.rerun()
 
     # Live status display
