@@ -203,11 +203,14 @@ services:
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
     command: python generator_daemon.py
 
-  generator-ui:
+# ============================================================================
+# Streamlit (UI)
+# ============================================================================
+  ui:
     build:
-      context: ./services/synthetic-data-generator
+      context: ./services/streamlit
       dockerfile: Dockerfile
-    container_name: generator-ui
+    container_name: ui
     ports:
       - "8501:8501"
     env_file: .env
@@ -227,36 +230,7 @@ services:
     volumes:
       - generator_data:/app/db
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
-    command: streamlit run streamlit_app.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
-
-# ============================================================================
-# Streamlit (UI)
-# ============================================================================
-  ui:
-    build:
-      context: ./services/streamlit
-      dockerfile: Dockerfile
-    container_name: ui
-    ports:
-      - "8502:8502"
-    env_file: .env
-    environment:
-      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
-      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
-      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
-      DB_PATH: /app/db/simulation_state.db
-    depends_on:
-      minio:
-        condition: service_healthy
-      nats:
-        condition: service_started
-    secrets:
-      - minio_user
-      - minio_password
-    volumes:
-      - generator_data:/app/db
-      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
-    command: streamlit run home.py --browser.gatherUsageStats false --server.port=8502 --server.address=0.0.0.0
+    command: streamlit run home.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
 # Spark (Processing)
