@@ -55,8 +55,9 @@ class DataGeneratorDaemon:
         self.state_store = StateStore(DB_PATH)
 
         logger.info("Loading baseline SECOM dataset into memory...")
-        self.baseline_df = pd.read_csv(RAW_DATA_PATH)
-        self.baseline_df['Time'] = pd.to_datetime(self.baseline_df['Time'])
+        self.baseline_df = pd.read_csv(RAW_DATA_PATH, parse_dates=['Time'], date_format='%Y-%m-%d %H:%M:%S')
+
+        self.baseline_df = self.baseline_df.copy()
         self.baseline_df['Date_Block'] = self.baseline_df['Time'].dt.date
         self.unique_dates = sorted(self.baseline_df['Date_Block'].unique())
         
@@ -67,7 +68,7 @@ class DataGeneratorDaemon:
         numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
 
         # Exclude targets or timestamp identifiers from noise/drift
-        self.features_to_mutate = [c for c in self.numeric_cols if c not in ['Time', 'Target', 'Pass_Fail']]
+        self.features_to_mutate = [c for c in numeric_cols if c not in ['Time', 'Target', 'Pass_Fail']]
         self.feature_stds = self.baseline_df[self.features_to_mutate].std()
         
         # S3 Filesystem setup for MinIO
@@ -92,7 +93,7 @@ class DataGeneratorDaemon:
                 logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
             except Exception as e:
                 logger.debug("Stream already exists: %s", e)
-            logger.info("Connected to NATS at %s", NATS_URL)
+            logger.info("Connected to NATS at %s", NATS_ENDPOINT)
 
         except Exception as e:
             logger.error(f"Failed to connect to NATS: {e}")
@@ -220,7 +221,7 @@ class DataGeneratorDaemon:
             while True:
                 config: SimulationConfig = self.state_store.get_config()
 
-                task = []
+                tasks = []
                 for line_id, lc in config.lines.items():
                     if lc.is_running:
                         tasks.append(self.run_line_cycle(line_id, lc))

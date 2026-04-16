@@ -94,7 +94,7 @@ class StateStore:
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
 
         with self._conn() as conn:
-            conn.executescript(self._schema)
+            conn.executescript(self._SCHEMA)
 
     def _conn(self):
         return sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
