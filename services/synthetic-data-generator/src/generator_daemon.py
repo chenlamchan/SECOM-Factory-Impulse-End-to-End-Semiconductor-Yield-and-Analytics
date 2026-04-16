@@ -93,9 +93,6 @@ class DataGeneratorDaemon:
                 await self.js.add_stream(
                     name=NATS_STREAM, 
                     subjects=[NATS_SUBJECT],
-                    storage=StorageType.FILE,
-                    retention=RetentionPolicy.WorkQueue,
-                    discard=DiscardPolicy.OLD,
                     )
                 logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
             except Exception as e:
