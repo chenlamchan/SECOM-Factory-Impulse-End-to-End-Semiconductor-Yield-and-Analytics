@@ -129,11 +129,13 @@ class DataGeneratorDaemon:
 
     def _apply_mutations(self, df: pd.DataFrame, lc: LineConfig) -> pd.DataFrame:
         """Applies controlled jitter and targeted sigma shifts."""
-        # 1. Controlled Jitter (Micro-noise)
-        if lc.jitter_variance > 0:
+        # 1. Controlled Jitter (Micro-noise) - LOCAL standard deviation for this specific day
+        if lc.jitter_variance > 0:  
+            local_stds = df[self.features_to_mutate].std().fillna(0)
+
             noise = np.random.normal(
                 loc=0, 
-                scale=self.feature_stds * lc.jitter_variance, 
+                scale=local_stds * lc.jitter_variance, 
                 size=(len(df), len(self.features_to_mutate))
             )
             # Only apply noise where data is not null to preserve missingness topology
@@ -142,7 +144,7 @@ class DataGeneratorDaemon:
                 ~mask, df[self.features_to_mutate] + noise
             )
 
-        # 2. Targeted Drift (Sigma Shift)
+        # 2. Targeted Drift (Sigma Shift) - GLOBAL feature_stds, equipment failure/drift should be an absolute physical shift, not a local one.
         for feature, sigma in lc.drift_config.items():
             if feature in self.features_to_mutate:
                 df[feature] = df[feature] + self.feature_stds[feature] * sigma
