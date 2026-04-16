@@ -188,3 +188,26 @@ Use **NATS with JetStream** enabled as the primary message broker and persistenc
 * **State Management:** Airflow will use a "Pull Consumer" pattern, fetching the next available file metadata from NATS based on the stream's sequence, ensuring no file is processed twice or skipped.
 
 ---
+### ADR-008: Compute Engine Pattern for Raw to Bronze Ingestion
+
+**Status:** ACCEPTED
+
+**Context:**
+We need to ingest event-driven, raw Parquet files from an S3-compatible object store (MinIO) into our Iceberg Bronze layer. The raw dataset contains ~590 sensor features and is subject to potential schema drift. The ingestion process requires reading the files, appending basic Medallion lineage metadata (e.g., `ingestion_timestamp`), and appending the records to the Iceberg catalog. We need a solution that minimizes compute overhead, handles dynamic schemas gracefully, and keeps Airflow strictly constrained to a control plane (orchestration only) without running heavy data processing tasks on the Airflow workers.
+
+**Decision:**
+Implement a **Containerized Task Pattern**. We will use PyIceberg and PyArrow inside a lightweight, ephemeral Docker container. Airflow will utilize the `DockerOperator` to spin up the container, pass the raw S3 file paths dynamically as arguments, execute the Python ingestion script, and immediately tear the container down upon completion. 
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **PySpark (`SparkSubmitOperator`)** | Massive JVM overhead, requires maintaining an active Spark cluster (master/worker nodes), and is severe overkill for a simple file-to-table read/append operation. |
+| **Trino Pushdown (`SQLExecuteQueryOperator`)** | Trino is an MPP engine optimized for structured tables. Querying ad-hoc S3 paths requires spoofing a file-based Hive Metastore and writing rigid, upfront DDLs. It is clunky for raw object storage and breaks easily if the raw schema drifts. |
+| **Local Python in Airflow (`PythonOperator`)** | Violates the architectural principle of treating Airflow purely as an orchestrator. Running PyArrow/PyIceberg directly on Airflow workers risks memory bloat and dependency conflicts. |
+
+**Consequences:**
+* **Performance:** Lightning-fast execution. PyArrow reads Parquet files directly into memory via C++ bindings, drastically reducing ingestion latency compared to spinning up Spark executors.
+* **Flexibility:** Dynamic schema inference via PyArrow eliminates the need for rigid DDL definitions or Hive metastore hacks for the raw layer.
+* **Resource Efficiency:** Zero idle compute. The container exists only for the seconds it takes to process the files.
+* **Trade-off:** Introduces the minor operational overhead of building and maintaining a custom Docker image for the PyIceberg script.
