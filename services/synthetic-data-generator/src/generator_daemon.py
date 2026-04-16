@@ -18,6 +18,7 @@ import json
 import nats
 import asyncio
 from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
+from nats.js.api import StorageType, RetentionPolicy, DiscardPolicy
 from config_schema import LineConfig, StateStore, SimulationConfig, ServiceConfig
 
 # Configure Production Logging
@@ -89,7 +90,13 @@ class DataGeneratorDaemon:
 
             # Ensure the stream exists (Idempotent operation)
             try:
-                await self.js.add_stream(name=NATS_STREAM, subjects=[NATS_SUBJECT])
+                await self.js.add_stream(
+                    name=NATS_STREAM, 
+                    subjects=[NATS_SUBJECT],
+                    storage=StorageType.FILE,
+                    retention=RetentionPolicy.WorkQueue,
+                    discard=DiscardPolicy.OLD,
+                    )
                 logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
             except Exception as e:
                 logger.debug("Stream already exists: %s", e)
