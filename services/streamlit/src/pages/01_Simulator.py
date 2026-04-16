@@ -39,6 +39,15 @@ def load_baseline():
     # Load your raw dataset for comparison
     return pd.read_csv(RAW_DATA_PATH, parse_dates=['Time'], date_format='%Y-%m-%d %H:%M:%S')
 
+def stop_all_lines_callback():
+    """Executes BEFORE the page redraws to safely update session state."""
+    current_cfg = store.get_config()
+    for lid, l_cfg in current_cfg.lines.items():
+        st.session_state[f"run_{lid}"] = False
+        l_cfg.is_running = False
+        
+    store.update_config(current_cfg)
+
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
@@ -115,6 +124,9 @@ with tab_control:
             fault_injection_enabled=fault_en,
             fault_probability=round(fault_prob, 3),
             fault_duration_seconds=lc.fault_duration_seconds,
+            date_ptr=lc.date_ptr,       
+            lot_counter=lc.lot_counter, 
+            year_offset=lc.year_offset,
         )
 
         st.markdown("---")
@@ -128,17 +140,20 @@ with tab_control:
         time.sleep(1.5)
         st.rerun()
 
-    if col_stop.button("⛔ Stop all lines", use_container_width=True):
-        for lc in updated_lines.values():
-            lc.is_running = False
-        store.update_config(SimulationConfig(lines=updated_lines))
-        st.toast("All lines stopped.")
-        time.sleep()
-        time.sleep(1.5)
-        st.rerun()
+    col_stop.button(
+        "⛔ Stop all lines", 
+        use_container_width=True, 
+        on_click=stop_all_lines_callback
+    )
 
     # Live status display
     st.markdown("#### Current status")
+
+    col_stat1, col_stat2 = st.columns([4, 1])
+    col_stat1.caption("Background daemon stats. Click refresh to poll the latest database updates.")
+    if col_stat2.button("🔄 Refresh Status", use_container_width=True):
+        st.rerun() # Forces Streamlit to pull the newest DB data
+
     live_cfg = store.get_config()
     status_cols = st.columns(3)
     for col, (lid, lc) in zip(status_cols, live_cfg.lines.items()):
@@ -203,7 +218,6 @@ with tab_validation:
         if matched_baseline_df.empty:
             st.error("Could not match the generated batch dates to the baseline dataset.")
             st.stop()
-
 
         # Wasserstein drift scores
         results = []
@@ -283,7 +297,7 @@ with tab_history:
 
         if events:
             ev_df = pd.DataFrame(events)
-            ev_df["ts"] = pd.to_datetime(ev_df["ts"], format="%Y-%m-%d %H:%M:%S")
+            ev_df["ts"] = pd.to_datetime(ev_df["ts"])
  
             # Summary
             c1, c2, c3 = st.columns(3)

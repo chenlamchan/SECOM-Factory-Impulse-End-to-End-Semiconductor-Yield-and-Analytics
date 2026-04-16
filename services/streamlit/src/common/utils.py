@@ -114,8 +114,9 @@ def get_latest_generated_batch(
 
         if not files: 
             return None
-        
-        return pd.read_parquet(f"s3://{files[0]}", filesystem=fs)
+
+        with fs.open(files[0], 'rb') as f:
+            return pd.read_parquet(f)
 
     except Exception as e:
         st.error(f"Unable to get latest batch, Error: {e}")
