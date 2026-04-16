@@ -39,7 +39,7 @@ NATS_ENDPOINT = service_config.nats_endpoint
 NATS_SUBJECT = service_config.nats_subject
 NATS_STREAM = service_config.nats_stream_name
 
-SHIFT = [
+SHIFTS = [
     ("Day", 6, 14),
     ("Swing", 14, 22),
     ("Night", 22, 30), # 30 wraps to 06
@@ -160,19 +160,19 @@ class DataGeneratorDaemon:
 
         if len(batch_df) > lc.batch_size:
             # Sample N rows and sort chronologically
-            mutated_df = mutated_df.sample(n=config.batch_size).sort_values('Time')
+            mutated_df = mutated_df.sample(n=lc.batch_size).sort_values('Time')
         
-        lot_id = self._next_lot_id
-        shift = _current_shift(mutated_df['Time'].hour)
+        lot_id = self._next_lot_id(line_id)
+        shift = _current_shift(mutated_df['Time'].dt.hour.iloc[0])
         iso_ts = now.isoformat()
 
         mutated_df = mutated_df.copy()
 
-        mutated_df["line_id"]              = line_id
-        mutated_df["tester_id"]            = lc.tester_id
-        mutated_df["shift"]                = shift
-        mutated_df["lot_id"]               = lot_id
-        mutated_df["is_synthetic"]         = True
+        mutated_df["line_id"] = line_id
+        mutated_df["tester_id"] = lc.tester_id
+        mutated_df["shift"] = shift
+        mutated_df["lot_id"] = lot_id
+        mutated_df["is_synthetic"] = True
         mutated_df["generation_timestamp"] = now
         mutated_df["applied_drift_features"] = json.dumps(lc.drift_config)
 
@@ -182,7 +182,7 @@ class DataGeneratorDaemon:
             f"/year={now.year}/month={now.month:02d}/day={now.day:02d}"
         )
 
-        file_path = f"{partition_path}/batch_{int(now.timestamp())}.parquet"
+        file_path = f"{partition}/batch_{int(now.timestamp())}.parquet"
 
         try:
             await asyncio.to_thread(mutated_df.to_parquet, file_path, filesystem=self.fs, index=False)
@@ -215,9 +215,9 @@ class DataGeneratorDaemon:
             message = json.dumps(payload).encode('utf-8')
             ack = await self.js.publish(NATS_SUBJECT, message)
             
-            logger.info("[%s] NATS ack seq=%d", line_id, ack.seq)
+            logger.info("[%s] NATS ack seq=%d", payload.get('line_id',"UNKNOWN"), ack.seq)
         except Exception as e:
-            logger.error("[%s] NATS publish failed: %s", line_id, e)
+            logger.error("[%s] NATS publish failed: %s", payload.get('line_id',"UNKNOWN"), e)
 
     async def start(self):
         """Main async entrypoint."""
@@ -236,7 +236,10 @@ class DataGeneratorDaemon:
                         logger.debug("[%s] idle", line_id)
                 
                 if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    await asyncio.gather(
+                        *tasks, 
+                        # return_exceptions=True,   # Comment for Fail Fast
+                        )
 
                 min_interval = min(
                     (lc.generation_interval_seconds for lc in config.lines.values() if lc.is_running),
