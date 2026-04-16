@@ -3,6 +3,7 @@ import argparse
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
 import pyarrow as pa
+import pyarrow.dataset as ds
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.exceptions import NoSuchTableError, NamespaceAlreadyExistsError
 from datetime import datetime
@@ -48,8 +49,26 @@ def main():
     )
     
     paths = args.file_paths.split(',')
-    dataset = pq.ParquetDataset(paths, filesystem=s3_fs)
-    arrow_table = dataset.read()
+
+    partitioning = ds.HivePartitioning(
+        pa.schema([
+            ("line_id", pa.large_string()),
+            ("year", pa.large_string()),
+            ("month", pa.large_string()),
+            ("day", pa.large_string()),
+        ])
+    )
+
+    dataset = ds.dataset(paths, filesystem=s3_fs, format="parquet", partitioning=partitioning)
+
+    arrow_table = dataset.to_table()
+
+    new_schema = pa.schema([
+        pa.field(f.name, pa.string(), nullable=f.nullable) if f.type == pa.large_string() else f 
+        for f in arrow_table.schema
+    ])
+
+    arrow_table = arrow_table.cast(new_schema)
 
     # 3. Append Metadata (PyArrow compute functions)
     # E.g., adding ingestion timestamps

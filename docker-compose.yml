@@ -275,6 +275,18 @@ services:
       retries: 3
 
 # ============================================================================
+# Ephemeral Ingestor (Builds the image for Airflow DockerOperator)
+# ============================================================================
+  bronze-ingestor:
+    build:
+      context: ./services/raw_to_bronze_ingestor
+      dockerfile: Dockerfile
+    container_name: bronze-ingestor
+    image: pyiceberg-ingestor:latest
+    profiles:
+      - bronze-ingestor
+
+# ============================================================================
 # dbt
 # ============================================================================
   dbt:
@@ -375,6 +387,9 @@ services:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -412,6 +427,9 @@ services:
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
       AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
