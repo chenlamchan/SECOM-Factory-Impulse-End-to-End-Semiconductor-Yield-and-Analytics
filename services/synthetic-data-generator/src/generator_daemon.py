@@ -69,7 +69,7 @@ class DataGeneratorDaemon:
         numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
 
         # Exclude targets or timestamp identifiers from noise/drift
-        self.features_to_mutate = [c for c in numeric_cols if c not in ['Time', 'Target', 'Pass_Fail']]
+        self.features_to_mutate = [c for c in numeric_cols if c not in ['Time', 'Target', 'Pass/Fail']]
         self.feature_stds = self.baseline_df[self.features_to_mutate].std()
         
         # S3 Filesystem setup for MinIO
