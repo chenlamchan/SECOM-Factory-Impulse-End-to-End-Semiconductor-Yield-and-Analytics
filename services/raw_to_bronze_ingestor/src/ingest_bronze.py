@@ -50,6 +50,7 @@ def main():
     
     paths = args.file_paths.split(',')
 
+    # use large_string in the HivePartitioning to prevent the "Unable to merge" error during the PyArrow read
     partitioning = ds.HivePartitioning(
         pa.schema([
             ("line_id", pa.large_string()),
@@ -61,21 +62,26 @@ def main():
 
     dataset = ds.dataset(paths, filesystem=s3_fs, format="parquet", partitioning=partitioning)
 
-    arrow_table = dataset.to_table()
+    scanner = dataset.scanner(columns=dataset.schema.names + ["__filename"])
+    arrow_table = scanner.to_table()
 
-    new_schema = pa.schema([
-        pa.field(f.name, pa.string(), nullable=f.nullable) if f.type == pa.large_string() else f 
-        for f in arrow_table.schema
-    ])
+    new_fields = []
+    for field in arrow_table.schema:
+        name = "source_file" if field.name == "__filename" else field.name
+        if field.type == pa.large_string():
+            new_fields.append(pa.field(name, pa.string(), nullable=field.nullable)) # Iceberg uses utf8 (standard string)
+        else:
+            new_fields.append(pa.field(name, field.type, nullable=field.nullable))
 
-    arrow_table = arrow_table.cast(new_schema)
+    renamed_table = arrow_table.rename_columns([f.name for f in new_fields])
+    final_table = renamed_table.cast(pa.schema(new_fields))
 
     # 3. Append Metadata (PyArrow compute functions)
     # E.g., adding ingestion timestamps
-    num_rows = arrow_table.num_rows
-    ingestion_ts = [datetime.utcnow()] * num_rows
-    arrow_table = arrow_table.append_column("ingestion_timestamp", pa.array(ingestion_ts, pa.timestamp('us')))
-    arrow_table = arrow_table.append_column("pipeline_version", pa.array(["0.1.0-pyiceberg"] * num_rows))
+    num_rows = final_table.num_rows
+    ingestion_ts = [datetime.now(datetime.timezone.utc)] * num_rows
+    final_table = final_table.append_column("ingestion_timestamp", pa.array(ingestion_ts, pa.timestamp('us')))
+    final_table = final_table.append_column("pipeline_version", pa.array(["0.1.0-pyiceberg"] * num_rows))
 
     table_identifier = "bronze.secom_data"
     
@@ -94,12 +100,12 @@ def main():
 
         table = catalog.create_table(
             identifier=table_identifier,
-            schema=arrow_table.schema,
+            schema=final_table.schema,
             location=f"{S3_WAREHOUSE_PATH}/bronze/secom_data"
         )
         print(f"Successfully created Iceberg table '{table_identifier}'.")
 
-    table.append(arrow_table)
+    table.append(final_table)
     print(f"Successfully appended {num_rows} rows to Iceberg Bronze.")
 
 if __name__ == "__main__":
