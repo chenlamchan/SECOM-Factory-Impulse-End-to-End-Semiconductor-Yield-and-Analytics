@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import time
 
 from common.utils import (
     AMBER, BLUE, CORAL, GRAY, PLOTLY_LAYOUT, RED, TEAL,
@@ -24,7 +25,7 @@ st.title("📈 Yield & Quality Analytics")
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Filters")
-    window_days = st.selectbox("Trend window", [7, 14, 30, 90], index=2)
+    window_days = st.selectbox("Trend window", [7, 14, 30, 90, 180, 365], index=3)
     lines_filter = st.multiselect("Production lines", ["LINE_A", "LINE_B", "LINE_C"],
                                   default=["LINE_A", "LINE_B", "LINE_C"])
 
@@ -47,6 +48,7 @@ def load_yield_data(days: int, lines:list):
             SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
             SUM(failed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 1000000 AS ppm_defective,
             SUM(total_wafers_tested) AS total_wafers_tested, 
+            SUM(quarantined_wafers) AS quarantined_wafers,
             SUM(passed_wafers) AS passed_wafers, 
             SUM(failed_wafers) AS failed_wafers
         FROM gold_daily_yield_metrics
@@ -73,7 +75,7 @@ def load_yield_data(days: int, lines:list):
         ORDER BY rank LIMIT 15
     """)
 
-    # (Dynamic aggregation for a 90-day view)
+    # (Dynamic aggregation for a N-day view)
     calendar = query_trino(f"""
         SELECT 
             process_date, 
@@ -83,7 +85,7 @@ def load_yield_data(days: int, lines:list):
         WHERE line_id IN {sql_lines}
         GROUP BY process_date
         ORDER BY process_date DESC 
-        LIMIT 90
+        LIMIT {days}
     """)
     return daily, shift, pareto, calendar
 
@@ -251,7 +253,7 @@ with tab_calendar:
         ))
         fig.update_layout(
             **PLOTLY_LAYOUT, height=280,
-            title="Yield calendar — last 90 days",
+            title=f"Yield calendar — last {window_days} days",
             yaxis=dict(
                 tickmode="array",
                 tickvals=list(range(7)),
@@ -268,16 +270,19 @@ with tab_waterfall:
     st.markdown("#### Yield loss waterfall")
     st.caption("Breaks down where yield is lost across the pipeline")
     if not daily.empty:
+
         latest = daily.iloc[0]
-        total  = int(latest["total_wafers_tested"]) + 0
+        process_tested = int(latest["total_wafers_tested"])
+        quarantined = int(latest["quarantined_wafers"])
         passed = int(latest["passed_wafers"])
         failed = int(latest["failed_wafers"])
-        quarantined_est = max(0, total - passed - failed)
+
+        gross_input = process_tested + quarantined
 
         labels  = ["Input wafers", "Quarantined (data quality)", "Failed (process)", "Final yield"]
-        measure = ["absolute",     "relative",                  "relative",         "total"]
-        values  = [total,          -quarantined_est,            -failed,             passed]
-        colors  = [BLUE,           AMBER,                        RED,                TEAL]
+        measure = ["absolute", "relative", "relative", "total"]
+        values  = [gross_input, -quarantined, -failed, passed]
+        colors  = [BLUE, AMBER, RED, TEAL]
 
         fig = go.Figure(go.Waterfall(
             orientation="v",
@@ -292,8 +297,32 @@ with tab_waterfall:
             textposition="outside",
         ))
         fig.update_layout(**PLOTLY_LAYOUT, height=360,
-                          title="Wafer yield waterfall — most recent day",
-                          yaxis_title="Wafer count")
+                        title="Wafer yield waterfall — most recent day",
+                        yaxis_title="Wafer count")
         st.plotly_chart(fig, use_container_width=True)
+
+        # Sum the data across all days currently in the 'daily' dataframe
+        agg_tested = int(daily["total_wafers_tested"].sum())
+        agg_quarantined = int(daily["quarantined_wafers"].sum())
+        agg_passed = int(daily["passed_wafers"].sum())
+        agg_failed = int(daily["failed_wafers"].sum())
+        
+        agg_gross_input = agg_tested + agg_quarantined
+
+        labels_agg  = ["Input wafers", "Quarantined", "Failed (process)", "Final yield"]
+        values_agg  = [agg_gross_input, -agg_quarantined, -agg_failed, agg_passed]
+
+        fig2 = go.Figure(go.Waterfall(
+            orientation="v", measure=measure, x=labels_agg, y=values_agg,
+            connector={"line": {"color": "rgb(63, 63, 63)"}},
+            increasing={"marker": {"color": TEAL}},
+            decreasing={"marker": {"color": RED}},
+            totals={"marker": {"color": BLUE}},
+            text=[f"{abs(v):,}" for v in values_agg], textposition="outside",
+        ))
+        fig2.update_layout(**PLOTLY_LAYOUT, height=360,
+                            title=f"Aggregate (Past {window_days} Days)", yaxis_title="Wafer count")
+        st.plotly_chart(fig2, use_container_width=True)
+                
     else:
         st.info("No data for waterfall chart.")
