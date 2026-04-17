@@ -33,44 +33,66 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_yield_data(days: int):
+def load_yield_data(days: int, lines:list):
+
+    if len(lines) == 1:
+        sql_lines = f"('{lines[0]}')"
+    else:
+        sql_lines = str(tuple(lines))
+
+    # 1. Daily KPIs (Dynamic aggregation across selected lines)
     daily = query_trino(f"""
-        SELECT process_date, yield_percentage, ppm_defective,
-               total_wafers_tested, passed_wafers, failed_wafers
+        SELECT 
+            process_date, 
+            SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
+            SUM(failed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 1000000 AS ppm_defective,
+            SUM(total_wafers_tested) AS total_wafers_tested, 
+            SUM(passed_wafers) AS passed_wafers, 
+            SUM(failed_wafers) AS failed_wafers
         FROM gold_daily_yield_metrics
-        ORDER BY process_date DESC LIMIT {days}
+        WHERE line_id IN {sql_lines}
+        GROUP BY process_date
+        ORDER BY process_date DESC 
+        LIMIT {days}
     """)
+
+    # 2. Shift Data (Filtered by lines)
     shift = query_trino(f"""
         SELECT process_date, line_id, shift, wafers_tested,
                passed_wafers, failed_wafers, quarantined_wafers,
                yield_pct, ppm_defective, scrap_rate_pct
         FROM gold_shift_metrics
-        WHERE process_date >= (SELECT MAX(process_date) FROM gold_shift_metrics) - INTERVAL '{days}' DAY
+        WHERE line_id IN {sql_lines}
+            AND process_date >= (SELECT MAX(process_date) FROM gold_shift_metrics) - INTERVAL '{days}' DAY
         ORDER BY process_date DESC, shift_order
     """)
+
     pareto = query_trino("""
         SELECT sensor_id, abs_correlation, effect_strength, direction
         FROM gold_failure_pareto
         ORDER BY rank LIMIT 15
     """)
-    # 90-day calendar data
-    calendar = query_trino("""
-        SELECT process_date, yield_percentage, total_wafers_tested
+
+    # (Dynamic aggregation for a 90-day view)
+    calendar = query_trino(f"""
+        SELECT 
+            process_date, 
+            SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
+            SUM(total_wafers_tested) AS total_wafers_tested
         FROM gold_daily_yield_metrics
-        ORDER BY process_date DESC LIMIT 90
+        WHERE line_id IN {sql_lines}
+        GROUP BY process_date
+        ORDER BY process_date DESC 
+        LIMIT 90
     """)
     return daily, shift, pareto, calendar
-
-
-with st.spinner("Loading yield data …"):
-    daily, shift_df, pareto, calendar = load_yield_data(window_days)
 
 if not lines_filter:
     st.warning("Select at least one production line.")
     st.stop()
 
-if shift_df is not None and not shift_df.empty:
-    shift_df = shift_df[shift_df["line_id"].isin(lines_filter)]
+with st.spinner("Loading yield data …"):
+    daily, shift_df, pareto, calendar = load_yield_data(window_days, lines_filter)
 
 # ---------------------------------------------------------------------------
 # KPI headline row
@@ -182,7 +204,7 @@ with tab_line:
 
 with tab_pareto:
     if not pareto.empty:
-        st.markdown("#### Top sensors correlated with wafer failure")
+        st.markdown("#### Top sensors correlated with wafer failure *(Global Factory Data)*")
         st.caption("Point-biserial |r| — higher = stronger association with fail label")
         fig = go.Figure(go.Bar(
             x=pareto["abs_correlation"],
@@ -212,8 +234,8 @@ with tab_calendar:
     if not calendar.empty:
         cal = calendar.sort_values("process_date").copy()
         cal["process_date"] = pd.to_datetime(cal["process_date"])
-        cal["week"]     = cal["process_date"].dt.isocalendar().week.astype(int)
-        cal["dow"]      = cal["process_date"].dt.dayofweek
+        cal["week"] = cal["process_date"].dt.isocalendar().week.astype(int)
+        cal["dow"] = cal["process_date"].dt.dayofweek
         cal["dow_name"] = cal["process_date"].dt.strftime("%a")
 
         fig = go.Figure(go.Heatmap(
