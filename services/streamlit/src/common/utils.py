@@ -13,6 +13,7 @@ import streamlit as st
 import s3fs
 from typing import Dict, List, Any, Optional
 from common.config import ServiceConfig
+import trino
 
 # ---------------------------------------------------------------------------
 # Chart theme
@@ -35,8 +36,8 @@ PLOTLY_LAYOUT = dict(
     font=dict(family="sans-serif", size=13, color="#E6EDF3"),
     margin=dict(l=50, r=20, t=40, b=40),
     legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1),
-    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
-    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
+    # xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
+    # yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
 )
 
 # ---------------------------------------------------------------------------
@@ -102,7 +103,46 @@ def badge(text: str, level: str = "ok") -> str:
 # Initialize config once to use in shared functions
 service_config = ServiceConfig()
 
-@st.cache_resource
+# ---------------------------------------------------------------------------
+# Trino connection
+# ---------------------------------------------------------------------------
+@st.cache_resource(ttl=3600)
+def get_trino_engine():
+    """Cached Trino connection. Retries on first connect."""
+    for attempt in range(5):
+        try:
+            conn = trino.dbapi.connect(
+                host=service_config.trino_host,
+                port=service_config.trino_port,
+                user="admin",
+                catalog="secom_catalog",
+                schema="gold",
+                request_timeout=60,
+            )
+            conn.cursor().execute("SELECT 1")   # warm-up
+            return conn
+        except Exception as e:
+            if attempt == 4:
+                raise
+            time.sleep(3 * (attempt + 1))
+ 
+@st.cache_data(ttl=60, show_spinner=False)
+def query_trino(sql: str, schema: str = "gold") -> pd.DataFrame:
+    """Execute SQL against Trino, return DataFrame. Results cached 60 s."""
+    conn = trino.dbapi.connect(
+        host=service_config.trino_host,
+        port=service_config.trino_port,
+        user="admin",
+        catalog="secom_catalog",
+        schema=schema,
+    )
+
+    return pd.read_sql_query(sql, conn)
+
+# ---------------------------------------------------------------------------
+# S3 / MinIO helpers
+# ---------------------------------------------------------------------------
+@st.cache_resource(ttl=3600)
 def get_s3_filesystem():
     """Shared function to establish MinIO connection."""
     return s3fs.S3FileSystem(
