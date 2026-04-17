@@ -238,8 +238,11 @@ with tab_validation:
                 "Status": "🚨 Drifted" if rel > REL_WASSERSTEIN_THRES else "✅ Stable",
                 "Drifted": rel > REL_WASSERSTEIN_THRES,
             })
-        
-        drift_result = pd.DataFrame(results).sort_values("Drift Score", ascending=False)
+
+        if results:
+            drift_result = pd.DataFrame(results).sort_values("Drift Score", ascending=False)
+        else:
+            drift_result = pd.DataFrame(columns=["Feature", "Drift Score", "Status", "Drifted"])
 
         col_a, col_b = st.columns(2)
 

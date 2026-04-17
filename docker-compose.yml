@@ -129,6 +129,7 @@ services:
   postgres:
     image: postgres:15
     container_name: postgres
+    stop_grace_period: 1m
     environment:
       POSTGRES_USER_FILE: /run/secrets/postgres_user
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password

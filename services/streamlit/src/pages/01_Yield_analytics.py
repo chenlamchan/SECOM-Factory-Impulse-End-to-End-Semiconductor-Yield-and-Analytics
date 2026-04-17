@@ -60,12 +60,18 @@ def load_yield_data(days: int, lines:list):
 
     # 2. Shift Data (Filtered by lines)
     shift = query_trino(f"""
+        WITH LineMaxDate AS (
+            SELECT MAX(process_date) AS max_date
+            FROM gold_shift_metrics 
+            WHERE line_id IN {sql_lines}
+        )
+
         SELECT process_date, line_id, shift, wafers_tested,
                passed_wafers, failed_wafers, quarantined_wafers,
                yield_pct, ppm_defective, scrap_rate_pct
         FROM gold_shift_metrics
         WHERE line_id IN {sql_lines}
-            AND process_date >= (SELECT MAX(process_date) FROM gold_shift_metrics) - INTERVAL '{days}' DAY
+            AND process_date >= (SELECT max_date FROM LineMaxDate) - INTERVAL '{days}' DAY
         ORDER BY process_date DESC, shift_order
     """)
 
@@ -309,7 +315,7 @@ with tab_waterfall:
         
         agg_gross_input = agg_tested + agg_quarantined
 
-        labels_agg  = ["Input wafers", "Quarantined", "Failed (process)", "Final yield"]
+        labels_agg  = ["Input wafers", "Quarantined (data quality)", "Failed (process)", "Final yield"]
         values_agg  = [agg_gross_input, -agg_quarantined, -agg_failed, agg_passed]
 
         fig2 = go.Figure(go.Waterfall(
