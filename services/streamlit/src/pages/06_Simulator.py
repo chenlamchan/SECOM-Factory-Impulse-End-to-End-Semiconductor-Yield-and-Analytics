@@ -208,8 +208,8 @@ with tab_validation:
         drift_info = latest_df.get("applied_drift_features", pd.Series(["{}"])).iloc[0]
         st.markdown(f"**Active drift on this batch:** `{drift_info}`")
 
-        batch_dates = latest_df['Time'].dt.date.unique()
-        matched_baseline_df = baseline_df[baseline_df['Time'].dt.date.isin(batch_dates)]
+        batch_month_days = latest_df['Time'].dt.strftime('%m-%d').unique()
+        matched_baseline_df = baseline_df[baseline_df['Time'].dt.strftime('%m-%d').isin(batch_month_days)]
         
         # Shared feature intersection
         numeric_base = matched_baseline_df.select_dtypes(include=["float64", "int64"]).columns

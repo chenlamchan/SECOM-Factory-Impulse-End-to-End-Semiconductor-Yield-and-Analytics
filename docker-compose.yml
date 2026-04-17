@@ -224,6 +224,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_started
+      trino:
+        condition: service_healthy
     secrets:
       - minio_user
       - minio_password

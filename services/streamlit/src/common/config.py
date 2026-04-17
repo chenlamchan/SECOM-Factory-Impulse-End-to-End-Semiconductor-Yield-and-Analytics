@@ -27,6 +27,10 @@ class ServiceConfig(BaseSettings):
     nats_subject:str = Field(default="secom.data.generated")
     nats_stream_name:str = Field(default="SECOM_PIPELINE")
 
+    trino_host:str = Field(default="trino")
+    trino_port:str = Field(default="8080")
+    catalog_name:str = "secom_catalog"
+
     @property
     def minio_access_key(self):
         return Path(self.minio_access_key_file).read_text().strip()
