@@ -5,8 +5,7 @@ WITH raw_bronze AS (
 )
 
 SELECT
-    observation_id,
-    -- Safely cast timestamps
+    {{ dbt_utils.generate_surrogate_key(['"Time"', 'source_file']) }} AS observation_id,
     CAST("Time" AS TIMESTAMP) AS process_timestamp,
     
     -- Translate binary labels to business logic
@@ -25,8 +24,23 @@ SELECT
         {% endfor %}
     ) AS missing_sensor_count,
 
+    line_id,
+    tester_id,
+    shift,
+    lot_id,
+    
     -- Include all raw features for downstream selection
-    {{ dbt_utils.star(from=source('secom_catalog','secom_data'), except=["observation_id", "Time", "Pass/Fail", "ingestion_timestamp", "ingestion_date", "source_file", "pipeline_version", "event_date"]) }},
+    {{ dbt_utils.star(from=source('secom_catalog','secom_data'), 
+    except=[
+        "Time", 
+        "Pass/Fail", 
+        "ingestion_timestamp",  
+        "pipeline_version", 
+        "line_id",
+        "tester_id",
+        "shift",
+        "lot_id",
+    ]) }},
     
     -- Lineage
     ingestion_timestamp AS bronze_ingested_at,
