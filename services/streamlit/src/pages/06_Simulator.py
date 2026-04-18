@@ -73,9 +73,12 @@ with tab_control:
     updated_lines = {}
     for line_id, lc in config.lines.items():
         color = LINE_COLORS.get(line_id, GRAY)
+
+        label_suffix = " 🏆 (GOLDEN LINE - Keep Faults/Drift/Jitter OFF)" if line_id == "LINE_A" else ""
+
         st.markdown(
             f"<div style='border-left:3px solid {color};padding-left:1rem;margin-bottom:0.5rem'>"
-            f"<b style='color:{color}'>{line_id}</b> — Tester: {lc.tester_id}</div>",
+            f"<b style='color:{color}'>{line_id}{label_suffix}</b> — Tester: {lc.tester_id}</div>",
             unsafe_allow_html=True,
         )
     
