@@ -160,7 +160,7 @@ if not daily.empty:
               f"{global_period_yield:.2f}%")
     c2.metric("Overall DPPM ",
               f"{global_period_dppm:,.0f}")
-    c3.metric("Total Wafers Tested Today", 
+    c3.metric("Total Wafers Tested", 
               f"{int(global_period_total_tested):,}")
 
     with st.expander("View Overall Yield Calendar Heatmap", expanded=False):
