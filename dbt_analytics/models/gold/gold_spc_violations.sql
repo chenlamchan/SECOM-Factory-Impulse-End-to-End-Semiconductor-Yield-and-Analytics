@@ -78,7 +78,7 @@ enriched AS (
             ORDER BY u.process_timestamp
         ) AS rn
     FROM unpivoted u
-    LEFT JOIN sensor_ref r ON (u.sensor_id = r.sensor_id)
+    LEFT JOIN sensor_ref r ON (u.sensor_id = r.sensor_id AND u.line_id = r.line_id AND u.tester_id = r.tester_id)
     WHERE u.val IS NOT NULL
 ),
 
