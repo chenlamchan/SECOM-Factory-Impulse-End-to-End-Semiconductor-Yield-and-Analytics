@@ -311,35 +311,36 @@ Since this is a fundamental design choice for your control strategy, it deserves
 * **Dashboard Logic:** The dashboard must now display the specific **Rule Number** and **Name** so maintenance teams know whether to look for a sudden spike (Rule 1) or a slow drift (Rule 3).
 
 ---
-### ADR-012: Derivation of Specification Limits for Capability Analysis
+## ADR-012: Derivation of Global Specification Limits via Golden Line Benchmarking
 
-**Status:** ACCEPTED
+**Status:** ACCEPTED  
+**Context:** The SECOM dataset lacks explicit engineering **Specification Limits** ($USL$/$LSL$). In a multi-line simulation (Lines A, B, and C), evaluating process capability ($Cpk$) requires a universal standard of "good." Without a fixed reference, each line is only measured against its own history, which masks performance gaps between different pieces of equipment.
 
-**Context:**
-The SECOM dataset provides raw sensor readings and process timestamps but lacks explicit engineering **Specification Limits** (Upper Specification Limit/Lower Specification Limit). Process capability indices like $C_p$ and $C_{pk}$ are essential for evaluating process performance, but they require these external benchmarks to be meaningful. Without them, the system defaults to using statistical Control Limits ($UCL/LCL$) as proxies, which mathematically forces the $C_p$ to $1.0$, rendering the metric useless for identifying process capability improvements or degradations relative to a standard.
+**Decision:** Implement a **Golden Tool** benchmarking strategy within the `gold_sensor_stats` dbt model. **Line A** (running raw, non-synthetic SECOM data) is designated as the factory standard. 
+* **Global Specification Limits ($USL$/$LSL$):** Calculated strictly from the first 100 observations of **Line A**.
+* **Local Control Limits ($UCL$/$LCL$):** Calculated independently for every individual Line/Tester/Sensor combination based on their own first 100 observations.
 
-**Decision:**
-Implement derived specification limits within the `gold_sensor_stats` dbt model by reverse-engineering $USL$ and $LSL$ from baseline statistics, assuming a centered process with a target $C_{pk} = 1.33$.
-
-* **Logic:**
-    * **$USL$**: $\mu + (3.99 \times \sigma)$
-    * **$LSL$**: $\mu - (3.99 \times \sigma)$
+**Logic:**
+The global standard for each sensor is reverse-engineered from Line A’s baseline, targeting a $Cpk = 1.33$:
+$$USL = \mu_{LineA} + (3.99 \times \sigma_{LineA})$$
+$$LSL = \mu_{LineA} - (3.99 \times \sigma_{LineA})$$
 
 **Rationale:**
-* **Industrial Benchmark:** A $C_{pk}$ of $1.33$ (representing a 4-sigma process) is the standard industry threshold for a "capable" process. By anchoring our specs here, we provide a realistic baseline for the "Capable/Marginal/Incapable" status badges in the UI.
-* **Centering Assumption:** In the absence of design intent (target values), assuming the Phase I baseline mean ($\mu$) is the process target represents the "golden state" of the equipment.
-* **Metric Utility:** Using a $3.99\sigma$ spread allows the $C_{pk}$ to fluctuate naturally based on real-time batch variance. If the batch standard deviation ($s$) is smaller than the baseline $\sigma$, the $C_{pk}$ will rise above $1.33$ (Green); if it increases, it will drop toward $1.0$ (Amber) or below (Red).
-* **Separation of Concerns:** This approach strictly separates **Control Limits** (used by the Nelson Rules to detect special cause variation) from **Specification Limits** (used to measure process health against a fixed standard).
+* **Golden Tool Concept:** In real-world manufacturing, product specifications are determined by design intent or the performance of the most stable "Golden" machine. Using Line A as this reference provides a grounded, non-arbitrary standard.
+* **Cross-Line Benchmarking:** By applying Line A’s specs to Lines B and C, the $Cpk$ gauge accurately reflects if synthetic drifts or equipment aging in those lines are making them less capable than the "ideal" state represented by Line A.
+* **Statistical Stability:** Since Line A uses raw SECOM data without synthetic injections, it provides the most authentic representation of the process's natural "Best Demonstrated Performance."
+* **Dual-Layer Monitoring:** * **Local Layer:** Nelson Rules trigger based on a machine's own $UCL/LCL$, catching sudden shifts.
+    * **Global Layer:** $Cpk$ gauges trigger based on Line A's $USL/LSL$, catching chronic underperformance.
 
 **Alternatives Considered:**
 | Option | Rejected Reason |
 | :--- | :--- |
-| **Using Control Limits ($3\sigma$)** | Mathematically forces $C_p$ to $1.0$. It treats the current process spread as the "ideal" limit, providing no way to measure if the process is actually capable of meeting tighter requirements. |
-| **Manual Limit Entry** | Impractical for a simulated environment with multiple sensors across different lines and testers. |
-| **Historical Min/Max** | Highly sensitive to outliers in the Phase I data and does not provide a statistically sound basis for capability indices. |
+| **Local Spec Derivation** | If Line B is inherently "noisier" than Line A, deriving specs from Line B data would "forgive" that noise, resulting in a misleadingly high $Cpk$. |
+| **Universal Control Limits** | Rejected because different testers often have unique mechanical signatures (offsets). Forcing Line A’s $UCL/LCL$ on Line B would cause constant "false alarm" Nelson Rule violations. |
 
 **Consequences:**
-* **Frozen Baseline:** These limits are calculated and "frozen" during the Phase I window (defined as the first 100 samples in `gold_sensor_stats.sql`).
-* **Batch Analysis:** The `SPCEngine.analyze_batch` function in `utils.py` must be updated to accept these four distinct parameters ($\mu$, $\sigma$, $USL$, $LSL$) to ensure the X-Chart and Capability Gauges are using the correct reference points.
-* **Operator Interpretation:** UI tooltips should clarify that these limits are derived from "Best Demonstrated Performance" during baseline, not necessarily from a customer-provided product blueprint.
+* **Line A Dependency:** The `gold_sensor_stats` dbt model must ensure Line A data is processed first or is present in the `silver` table before final limits are broadcast.
+* **Deterministic Calibration:** Both the Golden Specs and Local Controls are "frozen" after the Phase I window (100 samples) to prevent the "shifting baseline" problem where the standard moves as the process degrades.
+* **UI Interpretation:** Capability gauges across all lines now answer the specific question: *"How well is this specific machine meeting the high standard set by our Golden Line?"*
 
+---
