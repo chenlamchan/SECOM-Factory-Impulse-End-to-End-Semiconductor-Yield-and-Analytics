@@ -211,3 +211,72 @@ Implement a **Containerized Task Pattern**. We will use PyIceberg and PyArrow in
 * **Flexibility:** Dynamic schema inference via PyArrow eliminates the need for rigid DDL definitions or Hive metastore hacks for the raw layer.
 * **Resource Efficiency:** Zero idle compute. The container exists only for the seconds it takes to process the files.
 * **Trade-off:** Introduces the minor operational overhead of building and maintaining a custom Docker image for the PyIceberg script.
+
+---
+This is a great way to formalize the architectural decisions we just made. Documenting these logic choices is vital because "why" a specific SPC math was chosen is often lost over time.
+
+Based on our discussion regarding the transition from global statistics to an asset-specific, 2-pass baseline approach, here is the ADR.
+
+---
+
+### ADR-009: Asset-Specific 2-Pass Phase I SPC Baseline
+
+**Status:** ACCEPTED
+
+**Context:** The initial SPC implementation calculated global control limits ($\mu, \sigma$) across the entire factory and all sensors, ignoring the unique calibration baselines of individual testers and lines. Furthermore, the baseline calculation was "polluted" by anomalies and was designed to aggregate all historical data continuously. This led to "limit chasing" (where limits adapt to bad data, hiding drift) and inflated variance due to outliers. We also lacked parity between the SQL engine and Python engine regarding Nelson Rule 4 (14 alternating points).
+
+**Decision:** Implement an **Phase I Frozen Baseline** pattern using a **2-Pass Filtered Calculation** at the asset-grain.
+
+1.  **Asset-Specific Partitioning:** Every window function and join for stats and violations is now partitioned by `(line_id, tester_id, sensor_id)`.
+2.  **2-Pass Baseline Logic:** * **Pass 1:** Calculate "raw" stats for the first $N$ observations per asset.
+    * **Pass 2:** Re-calculate final stats after excluding any observations from that window that exceed $\pm3\sigma_{raw}$ to prevent inflated variance from outliers.
+3.  **Frozen Limits:** Once the Phase I baseline is established, limits are "frozen" and stored. Future observations (Phase II) are evaluated against these static limits to ensure drift is detectable.
+4.  **Rule 4 Implementation:** Added SQL logic to detect 12 consecutive sign flips in direction, representing 14 alternating points.
+5.  **Dbt Parameterization:** The baseline sample size (e.g., 100) is now controlled via `dbt_project.yml` variables for easy tuning.
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Continuous Moving Average** | Causes "limit chasing." If the process drifts slowly, the mean follows it, and the violation is never triggered (the boiling frog problem). |
+| **Median-based SPC** | While robust to outliers, it is mathematically disconnected from the Standard Deviation ($\sigma$) formula and lacks sensitivity to small, important process shifts. |
+| **Global Factory Limits** | Ignores physical differences and calibrations between individual testers, leading to high false-alarm rates on specific machines. |
+
+**Consequences:**
+* **Statistical Integrity:** The 2-pass method ensures that the "normal" process variation is not artificially widened by the very anomalies the system is supposed to catch.
+* **Sensitivity:** The system is now significantly more sensitive to tool-specific drift and wear.
+* **Operational Flexibility:** Data scientists can tune the baseline sensitivity (sample size) globally through dbt variables without modifying core SQL models.
+* **Parity:** The SQL monitoring engine now perfectly mirrors the logic used in the Python-based `SPCEngine`.
+
+---
+Since this is a fundamental design choice for your control strategy, it deserves its own **ADR**. This documents why you are monitoring every single wafer (Individual X-Chart) rather than averaging them by lot ($\bar{X}$-Chart), especially given the skewness concerns we discussed.
+
+---
+
+### ADR-010: Selection of Individual (X) Charting vs. Subgroup ($\bar{X}$) Charting
+
+**Status:** ACCEPTED
+
+**Context:** The SECOM dataset provides 100% metrology data (one record per wafer) rather than sampled data. We need to decide if the SPC engine should monitor individual wafers (X-Chart) or aggregate wafers into batches/lots ($\bar{X}$-Chart). While $\bar{X}$-charts are more robust to non-normal (skewed) distributions due to the Central Limit Theorem, the business requirement for SECOM analytics is to identify specific wafer-level failures that lead to scrap.
+
+**Decision:** Implement **Individual (X) Control Charts** as the primary monitoring pattern for the Gold Layer. Every observation in the `silver_secom_reporting` table is evaluated as a standalone point.
+
+**Rationale:**
+* **Metrology Density:** Since the data is already captured for 100% of the wafers, an Individual Chart provides the highest resolution of process visibility.
+* **Sensitivity to Catastrophic Failure:** A single wafer with a massive electrical short or physical defect might be "hidden" if averaged into a batch of 24 good wafers. Individual monitoring ensures these "spikes" trigger Rule 1 violations immediately.
+* **Pipeline Simplicity:** Monitoring individuals avoids the overhead of complex window-aggregation logic (calculating lot means) before applying Nelson Rules.
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Subgroup ($\bar{X}$) Charting** | While better at handling skewed data, it significantly reduces the ability to pinpoint which specific wafer in a lot caused a process deviation. It is better suited for high-volume sampling where not every wafer is measured. |
+| **Combined X/$\bar{X}$ Monitoring** | Leads to "Alarm Fatigue." If a lot is drifting, the system would trigger 25 individual alarms plus 1 batch alarm for the same root cause, overwhelming the operator dashboard. |
+
+**Consequences:**
+* **Skewness Management:** Because individual sensor data in SECOM can be skewed, we must rely on the **ADR-009 2-Pass Baseline** or mathematical transformations (like Log-normal) rather than relying on the Central Limit Theorem to "fix" the distribution.
+* **Noise Sensitivity:** Individual charts are more sensitive to "jitter" (measurement noise). This is mitigated by the `_apply_mutations` logic in the generation engine which controls jitter variance.
+* **Nelson Rule Application:** Rules like Rule 2 (9 points on one side) and Rule 3 (6 trending) are applied across the wafer sequence, which effectively detects the same "lot-level" drift that an $\bar{X}$-chart would, but with wafer-level granularity.
+
+---
+
