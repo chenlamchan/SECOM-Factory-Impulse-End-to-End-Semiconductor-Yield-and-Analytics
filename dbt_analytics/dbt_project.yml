@@ -16,3 +16,6 @@ models:
       +materialized: table
       +schema: gold
       +file_format: parquet
+
+vars:
+  spc_phase1_sample_size: 100
