@@ -43,36 +43,45 @@ def load_yield_data(days: int, lines:list):
 
     # 1. Daily KPIs (Dynamic aggregation across selected lines)
     daily = query_trino(f"""
+        WITH LineMaxDate AS (
+            SELECT line_id, MAX(process_date) AS max_date 
+            FROM gold_daily_yield_metrics 
+            GROUP BY line_id
+        )
+
         SELECT 
-            process_date, 
-            SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
-            SUM(failed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 1000000 AS ppm_defective,
-            SUM(total_wafers_tested) AS total_wafers_tested, 
-            SUM(quarantined_wafers) AS quarantined_wafers,
-            SUM(passed_wafers) AS passed_wafers, 
-            SUM(failed_wafers) AS failed_wafers
-        FROM gold_daily_yield_metrics
-        WHERE line_id IN {sql_lines}
-        GROUP BY process_date
-        ORDER BY process_date DESC 
-        LIMIT {days}
+            d.process_date, 
+            d.line_id,
+            SUM(d.passed_wafers) / CAST(NULLIF(SUM(d.total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
+            SUM(d.failed_wafers) / CAST(NULLIF(SUM(d.total_wafers_tested), 0) AS DOUBLE) * 1000000 AS ppm_defective,
+            SUM(d.total_wafers_tested) AS total_wafers_tested, 
+            SUM(d.quarantined_wafers) AS quarantined_wafers,
+            SUM(d.passed_wafers) AS passed_wafers, 
+            SUM(d.failed_wafers) AS failed_wafers
+        FROM gold_daily_yield_metrics d
+        JOIN LineMaxDate m ON d.line_id = m.line_id
+        WHERE d.process_date >= m.max_date - INTERVAL '{days}' DAY
+        GROUP BY d.process_date, d.line_id
+        ORDER BY d.process_date DESC, d.line_id
     """)
 
     # 2. Shift Data (Filtered by lines)
     shift = query_trino(f"""
         WITH LineMaxDate AS (
-            SELECT MAX(process_date) AS max_date
+            SELECT line_id, MAX(process_date) AS max_date
             FROM gold_shift_metrics 
             WHERE line_id IN {sql_lines}
+            GROUP BY line_id
         )
 
-        SELECT process_date, line_id, shift, wafers_tested,
-               passed_wafers, failed_wafers, quarantined_wafers,
-               yield_pct, ppm_defective, scrap_rate_pct
-        FROM gold_shift_metrics
-        WHERE line_id IN {sql_lines}
-            AND process_date >= (SELECT max_date FROM LineMaxDate) - INTERVAL '{days}' DAY
-        ORDER BY process_date DESC, shift_order
+        SELECT s.process_date, s.line_id, s.shift, s.wafers_tested,
+               s.passed_wafers, s.failed_wafers, s.quarantined_wafers,
+               s.yield_pct, s.ppm_defective, s.scrap_rate_pct
+        FROM gold_shift_metrics s
+        JOIN LineMaxDate m ON s.line_id = m.line_id
+        WHERE s.line_id IN {sql_lines}
+          AND s.process_date >= m.max_date - INTERVAL '{days}' DAY
+        ORDER BY s.process_date DESC, s.shift_order
     """)
 
     pareto = query_trino("""
@@ -83,15 +92,23 @@ def load_yield_data(days: int, lines:list):
 
     # (Dynamic aggregation for a N-day view)
     calendar = query_trino(f"""
+        WITH LineMaxDate AS (
+            SELECT line_id, MAX(process_date) AS max_date
+            FROM gold_daily_yield_metrics
+            WHERE line_id IN {sql_lines}
+            GROUP BY line_id
+        )
+
         SELECT 
-            process_date, 
-            SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
-            SUM(total_wafers_tested) AS total_wafers_tested
-        FROM gold_daily_yield_metrics
-        WHERE line_id IN {sql_lines}
-        GROUP BY process_date
-        ORDER BY process_date DESC 
-        LIMIT {days}
+            d.process_date, 
+            SUM(d.passed_wafers) / CAST(NULLIF(SUM(d.total_wafers_tested), 0) AS DOUBLE) * 100 AS yield_percentage, 
+            SUM(d.total_wafers_tested) AS total_wafers_tested
+        FROM gold_daily_yield_metrics d
+        JOIN LineMaxDate m ON d.line_id = m.line_id
+        WHERE d.line_id IN {sql_lines}
+          AND d.process_date >= m.max_date - INTERVAL '{days}' DAY
+        GROUP BY d.process_date
+        ORDER BY d.process_date DESC
     """)
     return daily, shift, pareto, calendar
 
@@ -106,58 +123,96 @@ with st.spinner("Loading yield data …"):
 # KPI headline row
 # ---------------------------------------------------------------------------
 if not daily.empty:
-    latest = daily.iloc[0]
-    prev   = daily.iloc[1] if len(daily) > 1 else None
+    global_max_date = daily["process_date"].max()
+    global_min_date = global_max_date - pd.Timedelta(days=window_days)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Current Yield",
-              f"{latest['yield_percentage']:.2f}%",
-              f"{latest['yield_percentage'] - float(prev['yield_percentage']):+.2f}%" if prev is not None else None)
-    c2.metric("DPPM",
-              f"{latest['ppm_defective']:,.0f}",
-              f"{latest['ppm_defective'] - float(prev['ppm_defective']):+.0f}" if prev is not None else None)
-    c3.metric("Wafers Tested Today", f"{int(latest['total_wafers_tested']):,}")
-    roll_avg = round(float(daily["yield_percentage"].mean()), 2)
-    c4.metric(f"{window_days}-Day Avg Yield", f"{roll_avg:.2f}%")
+    period_df = daily[
+        (daily["process_date"] >= global_min_date) & 
+        (daily["process_date"] <= global_max_date)
+    ]
+
+    # 1. Compute overall aggregate stats from the line-level daily dataframe
+    period_agg = period_df.groupby("process_date").agg({
+        "total_wafers_tested": "sum",
+        "quarantined_wafers": "sum",
+        "passed_wafers": "sum",
+        "failed_wafers": "sum"
+    }).reset_index()
+
+    period_agg["yield_percentage"] = (period_agg["passed_wafers"] / period_agg["total_wafers_tested"].replace(0, np.nan)) * 100
+    period_agg["ppm_defective"] = (period_agg["failed_wafers"] / period_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
+    period_agg = period_agg.sort_values("process_date", ascending=False)
+
+    period_total_tested = period_agg["total_wafers_tested"].sum()
+    period_passed = period_agg["passed_wafers"].sum()
+    period_failed = period_agg["failed_wafers"].sum()
+    period_yield = (period_passed / period_total_tested) * 100
+    period_dppm = (period_failed / period_total_tested) * 1000000
+
+    start_str = global_min_date.strftime('%Y-%m-%d')
+    end_str = global_max_date.strftime('%Y-%m-%d')
+
+    st.subheader("🏭 Factory Overall KPIs (All Lines)")
+    st.caption(f"📅 **Data Range:** {start_str} to {end_str}")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric(f"Overall Yield",
+              f"{period_yield:.2f}%")
+    c2.metric("Overall DPPM ",
+              f"{period_dppm:,.0f}")
+    c3.metric("Total Wafers Tested Today", 
+              f"{int(period_total_tested):,}")
+
     st.divider()
 
 # ---------------------------------------------------------------------------
 # Yield Trend + DPPM dual-axis
 # ---------------------------------------------------------------------------
 tab_trend, tab_line, tab_pareto, tab_calendar, tab_waterfall = st.tabs([
-    "📉 Yield Trend", "🏭 By Line & Shift", "📊 Failure Pareto",
+    "📉 Overall Yield Trend", "🏭 By Line & Shift", "📊 Failure Pareto",
     "📅 Calendar Heatmap", "🌊 Yield Waterfall",
 ])
 
 with tab_trend:
-    if not daily.empty:
-        d = daily.sort_values("process_date")
-        fig = go.Figure()
+    if not period_df.empty:
+        line_agg = period_df.groupby(["process_date", "line_id"]).agg({
+        "total_wafers_tested": "sum",
+        "quarantined_wafers": "sum",
+        "passed_wafers": "sum",
+        "failed_wafers": "sum"
+        }).reset_index()
+
+        line_agg["yield_percentage"] = (line_agg["passed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
+        line_agg["ppm_defective"] = (line_agg["failed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
+        line_agg = line_agg.sort_values("process_date", ascending=False)
+
+        # Plot individual lines
+        fig = px.line(
+            line_agg, x="process_date", y="yield_percentage", color="line_id",
+            markers=True, color_discrete_sequence=[TEAL, BLUE, AMBER],
+            labels={"yield_percentage": "Yield %", "process_date": "Date", "line_id": "Line"}
+        )
+
         fig.add_trace(go.Scatter(
-            x=d["process_date"], y=d["yield_percentage"],
-            name="Yield %", mode="lines+markers",
-            line=dict(color=TEAL, width=2),
-            fill="tozeroy", fillcolor="rgba(29,158,117,0.08)",
-        ))
-        # Rolling average
-        d["roll7"] = d["yield_percentage"].rolling(7, min_periods=1).mean()
-        fig.add_trace(go.Scatter(
-            x=d["process_date"], y=d["roll7"],
-            name="7-day MA", mode="lines",
+            x=period_agg["process_date"], y=period_agg["yield_percentage"],
+            name="Overall", mode="lines",
             line=dict(color=AMBER, dash="dot", width=1.5),
         ))
-        # DPPM on secondary axis
+
+        # Add Overall DPPM on secondary axis
         fig.add_trace(go.Bar(
-            x=d["process_date"], y=d["ppm_defective"],
-            name="DPPM", yaxis="y2", opacity=0.4,
-            marker_color=RED,
+            x=period_agg["process_date"], y=period_agg["ppm_defective"],
+            name="Overall DPPM", yaxis="y2", opacity=0.3,
+            marker_color=RED
         ))
+
         fig.update_layout(
-            **PLOTLY_LAYOUT, height=400,
-            title=f"Yield % & DPPM — last {window_days} days",
+            **PLOTLY_LAYOUT, height=450,
+            title=f"Yield % by Line & Overall DPPM — last {window_days} days",
             yaxis=dict(title="Yield %", range=[0, 100]),
-            yaxis2=dict(title="DPPM", overlaying="y", side="right",
+            yaxis2=dict(title="Overall DPPM", overlaying="y", side="right",
                         gridcolor="rgba(0,0,0,0)"),
+            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1)
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -274,7 +329,12 @@ with tab_calendar:
 
 with tab_waterfall:
     st.markdown("#### Yield loss waterfall")
-    st.caption("Breaks down where yield is lost across the pipeline")
+    # Dynamically display which lines are making up this aggregate
+    selected_lines_str = ", ".join(lines_filter)
+    st.caption(f"Breaks down where yield is lost across the pipeline ({selected_lines_str})")
+
+    wf_df = daily_agg.sort_values("process_date", ascending=False)
+    
     if not daily.empty:
 
         latest = daily.iloc[0]

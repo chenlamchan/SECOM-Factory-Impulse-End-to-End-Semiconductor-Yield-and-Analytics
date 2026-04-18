@@ -248,7 +248,7 @@ services:
       volumes:
         - spark_master_data:/opt/spark/data
       healthcheck:
-        test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+        test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080')\" || exit 1"]
         interval: 10s
         timeout: 5s
         retries: 5
