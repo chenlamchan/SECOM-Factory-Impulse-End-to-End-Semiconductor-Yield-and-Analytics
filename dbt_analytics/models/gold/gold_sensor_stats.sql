@@ -71,6 +71,10 @@ SELECT
     (mu - (3 * sigma)) as lcl,
     (mu + (2 * sigma)) as uwl, -- Upper Warning Limit
     (mu - (2 * sigma)) as lwl, -- Lower Warning Limit
+
+    (mu + (3.99 * sigma)) as usl, --Derived Specification Limits targeting Cpk = 1.33
+    (mu - (3.99 * sigma)) as lsl, --Derived Specification Limits targeting Cpk = 1.33
+
     CURRENT_TIMESTAMP as frozen_at,
     'v1.0_phase1_frozen' as logic_version
 FROM final_calculation
