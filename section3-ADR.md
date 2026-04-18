@@ -279,4 +279,35 @@ Since this is a fundamental design choice for your control strategy, it deserves
 * **Nelson Rule Application:** Rules like Rule 2 (9 points on one side) and Rule 3 (6 trending) are applied across the wafer sequence, which effectively detects the same "lot-level" drift that an $\bar{X}$-chart would, but with wafer-level granularity.
 
 ---
+### ADR-011: Selection of Nelson Rules for Automated Process Monitoring
 
+**Status:** ACCEPTED
+
+**Context:** We need a standardized logic to detect "out-of-control" states in the SECOM sensor data. While several SPC rule sets exist (Western Electric, Wheeler, AIAG), we must choose a set that balances the sensitivity to catch equipment drift against the risk of "false alarms" (Type I errors) in a high-volume semiconductor environment.
+
+**Decision:** Implement a subset of the **Nelson Rules** (specifically Rules 1, 2, 3, 4, and 5) as the primary detection logic.
+
+
+
+**Rationale:**
+* **Industry Standard:** Nelson rules are the widely accepted successor to the Western Electric (WECO) rules, providing a more comprehensive set of patterns for modern, computerized metrology systems.
+* **Pattern Versatility:** * **Rule 1 (Beyond 3$\sigma$):** Detects "Special Cause" variation or immediate catastrophic failure.
+    * **Rules 2 & 3 (Run and Trend):** Detect gradual tool wear or chemical depletion that a single-point check would miss.
+    * **Rule 4 (Alternating):** Specifically targets systematic issues like "hunting" in automated feedback loops or valve oscillations.
+    * **Rule 5 (Warning Zone):** Acts as an early-warning system before a process officially crosses the 3$\sigma$ failure line.
+* **Computational Compatibility:** The Nelson rules are mathematically structured as "rolling windows," making them highly efficient to implement in SQL window functions (Trino) and Python/Pandas rolling vectors.
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Western Electric (WECO) Rules** | Only includes 4 rules. It lacks the "Trend" and "Alternating" detection capabilities required for complex semiconductor gas/thermal sensors. |
+| **Simple 3$\sigma$ Thresholding** | Only catches "gross" failures. By the time a 3$\sigma$ violation occurs in a fab, you may have already produced an entire lot of scrap wafers that could have been caught earlier by a "Run" or "Trend" rule. |
+| **Machine Learning (Anomaly Detection)** | While powerful, ML lacks the **transparency** of SPC. Operators need to know *why* a machine stopped (e.g., "The mean shifted," not "The black-box score was 0.98"). |
+
+**Consequences:**
+* **Specificity Tuning:** Using more rules increases the chance of "false positives" due to natural noise. This is why we have parameterized the `jitter_variance` in the generator to ensure the baseline is stable.
+* **Compute Grain:** The rules are applied sequentially. We have ensured that the `rn` (row number) used for these rules is strictly partitioned by asset to prevent "Rule 2" or "Rule 3" from accidentally counting points across different machines.
+* **Dashboard Logic:** The dashboard must now display the specific **Rule Number** and **Name** so maintenance teams know whether to look for a sudden spike (Rule 1) or a slow drift (Rule 3).
+
+***
