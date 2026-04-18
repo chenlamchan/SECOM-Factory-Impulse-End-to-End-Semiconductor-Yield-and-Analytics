@@ -126,42 +126,104 @@ if not daily.empty:
     global_max_date = daily["process_date"].max()
     global_min_date = global_max_date - pd.Timedelta(days=window_days)
 
-    period_df = daily[
+    global_period_df = daily[
         (daily["process_date"] >= global_min_date) & 
         (daily["process_date"] <= global_max_date)
     ]
 
     # 1. Compute overall aggregate stats from the line-level daily dataframe
-    period_agg = period_df.groupby("process_date").agg({
+    global_period_agg = global_period_df.groupby("process_date").agg({
         "total_wafers_tested": "sum",
         "quarantined_wafers": "sum",
         "passed_wafers": "sum",
         "failed_wafers": "sum"
     }).reset_index()
 
-    period_agg["yield_percentage"] = (period_agg["passed_wafers"] / period_agg["total_wafers_tested"].replace(0, np.nan)) * 100
-    period_agg["ppm_defective"] = (period_agg["failed_wafers"] / period_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-    period_agg = period_agg.sort_values("process_date", ascending=False)
+    global_period_agg["yield_percentage"] = (global_period_agg["passed_wafers"] / global_period_agg["total_wafers_tested"].replace(0, np.nan)) * 100
+    global_period_agg["ppm_defective"] = (global_period_agg["failed_wafers"] / global_period_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
+    global_period_agg = global_period_agg.sort_values("process_date", ascending=False)
 
-    period_total_tested = period_agg["total_wafers_tested"].sum()
-    period_passed = period_agg["passed_wafers"].sum()
-    period_failed = period_agg["failed_wafers"].sum()
-    period_yield = (period_passed / period_total_tested) * 100
-    period_dppm = (period_failed / period_total_tested) * 1000000
+    global_period_total_tested = global_period_agg["total_wafers_tested"].sum()
+    global_period_passed = global_period_agg["passed_wafers"].sum()
+    global_period_failed = global_period_agg["failed_wafers"].sum()
+    global_period_yield = (global_period_passed / global_period_total_tested) * 100
+    global_period_dppm = (global_period_failed / global_period_total_tested) * 1000000
 
-    start_str = global_min_date.strftime('%Y-%m-%d')
-    end_str = global_max_date.strftime('%Y-%m-%d')
+    global_start_str = global_min_date.strftime('%Y-%m-%d')
+    global_end_str = global_max_date.strftime('%Y-%m-%d')
 
     st.subheader("🏭 Factory Overall KPIs (All Lines)")
-    st.caption(f"📅 **Data Range:** {start_str} to {end_str}")
+    st.caption(f"📅 **Data Range:** {global_start_str} to {global_end_str}")
     
     c1, c2, c3 = st.columns(3)
     c1.metric(f"Overall Yield",
-              f"{period_yield:.2f}%")
+              f"{global_period_yield:.2f}%")
     c2.metric("Overall DPPM ",
-              f"{period_dppm:,.0f}")
+              f"{global_period_dppm:,.0f}")
     c3.metric("Total Wafers Tested Today", 
-              f"{int(period_total_tested):,}")
+              f"{int(global_period_total_tested):,}")
+
+    with st.expander("View Overall Yield Calendar Heatmap", expanded=False):
+        if not global_period_agg.empty:
+            cal_global = global_period_agg.sort_values("process_date").copy()
+            cal_global["process_date"] = pd.to_datetime(cal_global["process_date"])
+            cal_global["week"] = cal_global["process_date"].dt.isocalendar().week.astype(int)
+            cal_global["dow"] = cal_global["process_date"].dt.dayofweek
+            
+            fig_cal_global = go.Figure(go.Heatmap(
+                x=cal_global["week"],
+                y=cal_global["dow"],
+                z=cal_global["yield_percentage"],
+                text=[f"{d.strftime('%b %d')}<br>Yield: {y:.1f}%"
+                      for d, y in zip(cal_global["process_date"], cal_global["yield_percentage"])],
+                hovertemplate="%{text}<extra></extra>",
+                colorscale=[[0, "#A32D2D"], [0.5, "#854F0B"], [1, "#0F6E56"]],
+                zmin=0, zmax=100,
+                xgap=3, ygap=3,
+            ))
+            fig_cal_global.update_layout(
+                **PLOTLY_LAYOUT, height=280,
+                title=f"Global Yield Calendar ({global_start_str} to {global_end_str})",
+                yaxis=dict(
+                    tickmode="array",
+                    tickvals=list(range(7)),
+                    ticktext=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                    autorange="reversed",
+                ),
+                xaxis_title="Week of year",
+            )
+            st.plotly_chart(fig_cal_global, use_container_width=True)
+        else:
+            st.info("No data available to render the global calendar.")
+
+    with st.expander("View Overall Yield Loss Waterfall", expanded=False):
+ 
+        # Aggregate data for the global period
+        agg_tested = int(global_period_df["total_wafers_tested"].sum())
+        agg_quarantined = int(global_period_df["quarantined_wafers"].sum())
+        agg_passed = int(global_period_df["passed_wafers"].sum())
+        agg_failed = int(global_period_df["failed_wafers"].sum())
+        
+        agg_gross_input = agg_tested + agg_quarantined
+
+        labels  = ["Input wafers", "Quarantined (data quality)", "Failed (process)", "Final yield"]
+        measure = ["absolute", "relative", "relative", "total"]
+        values_agg  = [agg_gross_input, -agg_quarantined, -agg_failed, agg_passed]
+
+        fig_global = go.Figure(go.Waterfall(
+            orientation="v", measure=measure, x=labels, y=values_agg,
+            connector={"line": {"color": "rgb(63, 63, 63)"}},
+            increasing={"marker": {"color": TEAL}},
+            decreasing={"marker": {"color": RED}},
+            totals={"marker": {"color": BLUE}},
+            text=[f"{abs(v):,}" for v in values_agg], textposition="outside",
+        ))
+        fig_global.update_layout(**PLOTLY_LAYOUT, height=360,
+                            title="Global Yield Waterfall", yaxis_title="Wafer count")
+        st.plotly_chart(fig_global, use_container_width=True)
+
+        st.divider()
+
 
     st.divider()
 
@@ -174,34 +236,34 @@ tab_trend, tab_line, tab_pareto, tab_calendar, tab_waterfall = st.tabs([
 ])
 
 with tab_trend:
-    if not period_df.empty:
-        line_agg = period_df.groupby(["process_date", "line_id"]).agg({
+    if not global_period_df.empty:
+        global_line_agg = global_period_df.groupby(["process_date", "line_id"]).agg({
         "total_wafers_tested": "sum",
         "quarantined_wafers": "sum",
         "passed_wafers": "sum",
         "failed_wafers": "sum"
         }).reset_index()
 
-        line_agg["yield_percentage"] = (line_agg["passed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
-        line_agg["ppm_defective"] = (line_agg["failed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-        line_agg = line_agg.sort_values("process_date", ascending=False)
+        global_line_agg["yield_percentage"] = (global_line_agg["passed_wafers"] / global_line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
+        global_line_agg["ppm_defective"] = (global_line_agg["failed_wafers"] / global_line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
+        global_line_agg = global_line_agg.sort_values("process_date", ascending=False)
 
         # Plot individual lines
         fig = px.line(
-            line_agg, x="process_date", y="yield_percentage", color="line_id",
+            global_line_agg, x="process_date", y="yield_percentage", color="line_id",
             markers=True, color_discrete_sequence=[TEAL, BLUE, AMBER],
             labels={"yield_percentage": "Yield %", "process_date": "Date", "line_id": "Line"}
         )
 
         fig.add_trace(go.Scatter(
-            x=period_agg["process_date"], y=period_agg["yield_percentage"],
+            x=global_period_agg["process_date"], y=global_period_agg["yield_percentage"],
             name="Overall", mode="lines",
             line=dict(color=AMBER, dash="dot", width=1.5),
         ))
 
         # Add Overall DPPM on secondary axis
         fig.add_trace(go.Bar(
-            x=period_agg["process_date"], y=period_agg["ppm_defective"],
+            x=global_period_agg["process_date"], y=global_period_agg["ppm_defective"],
             name="Overall DPPM", yaxis="y2", opacity=0.3,
             marker_color=RED
         ))
@@ -214,42 +276,54 @@ with tab_trend:
                         gridcolor="rgba(0,0,0,0)"),
             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key='global_yield_chart')
     else:
         st.info("No daily yield data found.")
 
 with tab_line:
+    
     if not shift_df.empty:
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("#### Yield % by production line")
             line_agg = shift_df.groupby("line_id").agg(
-                yield_pct=("yield_pct", "mean")
+                passed=("passed_wafers", "sum"),
+                tested=("wafers_tested", "sum")
             ).reset_index()
+            line_agg["yield_pct"] = (line_agg["passed"] / line_agg["tested"].replace(0, np.nan)) * 100
+
             fig = px.bar(line_agg, x="line_id", y="yield_pct",
                          color="line_id", color_discrete_sequence=[TEAL, BLUE, AMBER],
                          labels={"yield_pct": "Avg Yield %", "line_id": "Line"},
                          text_auto=".1f")
             fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False,
                               yaxis_range=[0, 100])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="bar_chart_avg_yield_by_line")
 
         with col_b:
             st.markdown("#### Yield % by shift")
             shift_agg = shift_df.groupby("shift").agg(
-                yield_pct=("yield_pct", "mean")
+                passed=("passed_wafers", "sum"),
+                tested=("wafers_tested", "sum")
             ).reset_index()
+            shift_agg["yield_pct"] = (shift_agg["passed"] / shift_agg["tested"].replace(0, np.nan)) * 100
+
             fig2 = px.bar(shift_agg, x="shift", y="yield_pct",
                           color="shift", color_discrete_sequence=[TEAL, AMBER, CORAL],
                           labels={"yield_pct": "Avg Yield %", "shift": "Shift"},
                           text_auto=".1f")
             fig2.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False,
                                yaxis_range=[0, 100])
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True, key="bar_chart_avg_yield_by_shift")
 
         st.markdown("#### Yield by line × shift (heatmap)")
-        pivot = shift_df.groupby(["line_id", "shift"])["yield_pct"].mean().reset_index()
+        pivot = shift_df.groupby(["line_id", "shift"]).agg(
+            passed=("passed_wafers", "sum"),
+            tested=("wafers_tested", "sum")
+        ).reset_index()
+        pivot["yield_pct"] = (pivot["passed"] / pivot["tested"].replace(0, np.nan)) * 100
         pivot_wide = pivot.pivot(index="line_id", columns="shift", values="yield_pct")
+
         fig3 = go.Figure(go.Heatmap(
             z=pivot_wide.values,
             x=pivot_wide.columns.tolist(),
@@ -261,9 +335,81 @@ with tab_line:
             texttemplate="%{text}",
         ))
         fig3.update_layout(**PLOTLY_LAYOUT, height=280)
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, use_container_width=True, key="heatmap_avg_yield_by_line_shift")
     else:
         st.info("No shift-level data found. Run the multi-line generator to populate.")
+
+    st.divider()
+    
+    with st.expander("View Yield Trend by Production Lines", expanded=False):
+        st.markdown("#### Yield Trend & Metrics by Production Line")
+        
+        if not daily.empty:
+            for line in lines_filter:
+                line_df = daily[daily["line_id"] == line]
+                line_max_date = line_df["process_date"].max()
+                line_min_date = line_max_date - pd.Timedelta(days=window_days)
+                line_start_str = line_min_date.strftime('%Y-%m-%d')
+                line_end_str = line_max_date.strftime('%Y-%m-%d')
+
+                line_period_df = line_df[
+                    (line_df["process_date"] >= line_min_date) & 
+                    (line_df["process_date"] <= line_max_date)
+                ]
+
+                line_agg = line_period_df.groupby("process_date").agg({
+                    "total_wafers_tested": "sum",
+                    "quarantined_wafers": "sum",
+                    "passed_wafers": "sum",
+                    "failed_wafers": "sum"
+                }).reset_index()
+
+                line_agg["yield_percentage"] = (line_agg["passed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
+                line_agg["ppm_defective"] = (line_agg["failed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
+                line_agg = line_agg.sort_values("process_date", ascending=False)
+
+                line_total_tested = line_agg["total_wafers_tested"].sum()
+                line_passed = line_agg["passed_wafers"].sum()
+                line_failed = line_agg["failed_wafers"].sum()
+                line_yield = (line_passed / line_total_tested) * 100
+                line_dppm = (line_failed / line_total_tested) * 1000000
+
+                st.markdown(f"### 🏭 {line}")
+                st.caption(f"📅 **Data Range:** {line_start_str} to {line_end_str}")
+
+                # Render the time plot for the individual line trendline
+                fig = px.line(
+                    line_agg, x="process_date", y="yield_percentage",
+                    markers=True, color_discrete_sequence=[TEAL],
+                    labels={"yield_percentage": "Yield %", "process_date": "Date"}
+                )
+
+                # Add Overall DPPM on secondary axis
+                fig.add_trace(go.Bar(
+                    x=line_agg["process_date"], y=line_agg["ppm_defective"],
+                    name="Overall DPPM", yaxis="y2", opacity=0.3,
+                    marker_color=RED
+                ))
+
+                fig.update_layout(
+                    **PLOTLY_LAYOUT, 
+                    height=350,
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    yaxis=dict(title="Yield %", range=[0, 100]),
+                    yaxis2=dict(title="Overall DPPM", overlaying="y", side="right",
+                                gridcolor="rgba(0,0,0,0)"),
+                    legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1)
+                )
+
+                st.plotly_chart(fig, use_container_width=True, key=f"yield_chart_{line}")
+
+                c1, c2, c3 = st.columns(3)
+                # Rendering metrics vertically beside the plot fits perfectly
+                c1.metric(f"Overall Yield", f"{line_yield:.2f}%")
+                c2.metric("Overall DPPM", f"{line_dppm:,.0f}")
+                c3.metric("Total Wafers Tested", f"{int(line_total_tested):,}")
+                
+                st.divider()
 
 with tab_pareto:
     if not pareto.empty:
@@ -294,101 +440,118 @@ with tab_pareto:
         st.info("Failure pareto not yet computed. Run dbt models first.")
 
 with tab_calendar:
-    if not calendar.empty:
-        cal = calendar.sort_values("process_date").copy()
-        cal["process_date"] = pd.to_datetime(cal["process_date"])
-        cal["week"] = cal["process_date"].dt.isocalendar().week.astype(int)
-        cal["dow"] = cal["process_date"].dt.dayofweek
-        cal["dow_name"] = cal["process_date"].dt.strftime("%a")
-
-        fig = go.Figure(go.Heatmap(
-            x=cal["week"],
-            y=cal["dow"],
-            z=cal["yield_percentage"],
-            text=[f"{d.strftime('%b %d')}<br>Yield: {y:.1f}%"
-                  for d, y in zip(cal["process_date"], cal["yield_percentage"])],
-            hovertemplate="%{text}<extra></extra>",
-            colorscale=[[0, "#A32D2D"], [0.5, "#854F0B"], [1, "#0F6E56"]],
-            zmin=0, zmax=100,
-            xgap=3, ygap=3,
-        ))
-        fig.update_layout(
-            **PLOTLY_LAYOUT, height=280,
-            title=f"Yield calendar — last {window_days} days",
-            yaxis=dict(
-                tickmode="array",
-                tickvals=list(range(7)),
-                ticktext=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-                autorange="reversed",
-            ),
-            xaxis_title="Week of year",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No calendar data yet.")
-
-with tab_waterfall:
-    st.markdown("#### Yield loss waterfall")
-    # Dynamically display which lines are making up this aggregate
-    selected_lines_str = ", ".join(lines_filter)
-    st.caption(f"Breaks down where yield is lost across the pipeline ({selected_lines_str})")
-
-    wf_df = daily_agg.sort_values("process_date", ascending=False)
+    st.markdown("#### Yield Calendar by Production Line")
     
     if not daily.empty:
+        cols = st.columns(len(lines_filter))
 
-        latest = daily.iloc[0]
-        process_tested = int(latest["total_wafers_tested"])
-        quarantined = int(latest["quarantined_wafers"])
-        passed = int(latest["passed_wafers"])
-        failed = int(latest["failed_wafers"])
+        for idx, line in enumerate(lines_filter):
+            line_df = daily[daily["line_id"] == line]
+            if line_df.empty:
+                continue
+            
+            # Determine line-specific date context
+            line_max_date = line_df["process_date"].max()
+            line_min_date = line_max_date - pd.Timedelta(days=window_days)
+            line_period_df = line_df[
+                (line_df["process_date"] >= line_min_date) & 
+                (line_df["process_date"] <= line_max_date)
+            ]
+            
+            line_start_str = line_min_date.strftime('%Y-%m-%d')
+            line_end_str = line_max_date.strftime('%Y-%m-%d')
 
-        gross_input = process_tested + quarantined
+            cal_line = line_period_df.sort_values("process_date").copy()
+            cal_line["process_date"] = pd.to_datetime(cal_line["process_date"])
+            cal_line["week"] = cal_line["process_date"].dt.isocalendar().week.astype(int)
+            cal_line["dow"] = cal_line["process_date"].dt.dayofweek
 
-        labels  = ["Input wafers", "Quarantined (data quality)", "Failed (process)", "Final yield"]
-        measure = ["absolute", "relative", "relative", "total"]
-        values  = [gross_input, -quarantined, -failed, passed]
-        colors  = [BLUE, AMBER, RED, TEAL]
+            fig_cal_line = go.Figure(go.Heatmap(
+                x=cal_line["week"],
+                y=cal_line["dow"],
+                z=cal_line["yield_percentage"],
+                text=[f"{d.strftime('%b %d')}<br>Yield: {y:.1f}%"
+                      for d, y in zip(cal_line["process_date"], cal_line["yield_percentage"])],
+                hovertemplate="%{text}<extra></extra>",
+                colorscale=[[0, "#A32D2D"], [0.5, "#854F0B"], [1, "#0F6E56"]],
+                zmin=0, zmax=100,
+                xgap=3, ygap=3,
+            ))
+            
+            # Add a unique key so Streamlit renders multiple charts correctly
+            fig_cal_line.update_layout(
+                **PLOTLY_LAYOUT, height=280,
+                title=f"🏭 {line} Yield Calendar ({line_start_str} to {line_end_str})",
+                yaxis=dict(
+                    tickmode="array",
+                    tickvals=list(range(7)),
+                    ticktext=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                    autorange="reversed",
+                ),
+                xaxis_title="Week of year",
+            )
 
-        fig = go.Figure(go.Waterfall(
-            orientation="v",
-            measure=measure,
-            x=labels,
-            y=values,
-            connector={"line": {"color": "rgb(63, 63, 63)"}},
-            increasing={"marker": {"color": TEAL}},
-            decreasing={"marker": {"color": RED}},
-            totals={"marker": {"color": BLUE}},
-            text=[f"{abs(v):,}" for v in values],
-            textposition="outside",
-        ))
-        fig.update_layout(**PLOTLY_LAYOUT, height=360,
-                        title="Wafer yield waterfall — most recent day",
-                        yaxis_title="Wafer count")
-        st.plotly_chart(fig, use_container_width=True)
+            with cols[idx % len(cols)]:
+                st.plotly_chart(fig_cal_line, use_container_width=True, key=f"cal_chart_{line}")
+    else:
+        st.info("No daily data available for line-specific calendars.")
 
-        # Sum the data across all days currently in the 'daily' dataframe
-        agg_tested = int(daily["total_wafers_tested"].sum())
-        agg_quarantined = int(daily["quarantined_wafers"].sum())
-        agg_passed = int(daily["passed_wafers"].sum())
-        agg_failed = int(daily["failed_wafers"].sum())
+with tab_waterfall:
+    st.markdown("#### Yield Loss Waterfall")
+    
+    if not daily.empty and not global_period_df.empty:
+
+        st.markdown("### 🏭 By Production Line")
         
-        agg_gross_input = agg_tested + agg_quarantined
-
-        labels_agg  = ["Input wafers", "Quarantined (data quality)", "Failed (process)", "Final yield"]
-        values_agg  = [agg_gross_input, -agg_quarantined, -agg_failed, agg_passed]
-
-        fig2 = go.Figure(go.Waterfall(
-            orientation="v", measure=measure, x=labels_agg, y=values_agg,
-            connector={"line": {"color": "rgb(63, 63, 63)"}},
-            increasing={"marker": {"color": TEAL}},
-            decreasing={"marker": {"color": RED}},
-            totals={"marker": {"color": BLUE}},
-            text=[f"{abs(v):,}" for v in values_agg], textposition="outside",
-        ))
-        fig2.update_layout(**PLOTLY_LAYOUT, height=360,
-                            title=f"Aggregate (Past {window_days} Days)", yaxis_title="Wafer count")
-        st.plotly_chart(fig2, use_container_width=True)
+        # Create columns dynamically based on how many lines are selected
+        # (Limit to 2 or 3 per row so they don't get too squished)
+        cols = st.columns(len(lines_filter)) 
+        
+        for idx, line in enumerate(lines_filter):
+            line_df = daily[daily["line_id"] == line]
+            if line_df.empty:
+                continue
+                
+            line_max_date = line_df["process_date"].max()
+            line_min_date = line_max_date - pd.Timedelta(days=window_days)
+            
+            line_period_df = line_df[
+                (line_df["process_date"] >= line_min_date) & 
+                (line_df["process_date"] <= line_max_date)
+            ]
+            
+            line_start_str = line_min_date.strftime('%Y-%m-%d')
+            line_end_str = line_max_date.strftime('%Y-%m-%d')
+            
+            l_tested = int(line_period_df["total_wafers_tested"].sum())
+            l_quarantined = int(line_period_df["quarantined_wafers"].sum())
+            l_passed = int(line_period_df["passed_wafers"].sum())
+            l_failed = int(line_period_df["failed_wafers"].sum())
+            
+            l_gross_input = l_tested + l_quarantined
+            l_values = [l_gross_input, -l_quarantined, -l_failed, l_passed]
+            
+            fig_line = go.Figure(go.Waterfall(
+                orientation="v", measure=measure, x=labels, y=l_values,
+                connector={"line": {"color": "rgb(63, 63, 63)"}},
+                increasing={"marker": {"color": TEAL}},
+                decreasing={"marker": {"color": RED}},
+                totals={"marker": {"color": BLUE}},
+                text=[f"{abs(v):,}" for v in l_values], textposition="outside",
+            ))
+            
+            # Hide the legend and reduce margins to fit better in a column
+            fig_line.update_layout(
+                **PLOTLY_LAYOUT, 
+                height=300,
+                margin=dict(l=20, r=20, t=40, b=20),
+                title=dict(text=f"{line}<br><sup>{line_start_str} to {line_end_str}</sup>", font=dict(size=14)),
+                showlegend=False
+            )
+            
+            # Render inside the dynamically assigned column
+            with cols[idx % len(cols)]:
+                st.plotly_chart(fig_line, use_container_width=True, key=f"waterfall_chart_{line}")
                 
     else:
-        st.info("No data for waterfall chart.")
+        st.info("No data available for waterfall charts.")
