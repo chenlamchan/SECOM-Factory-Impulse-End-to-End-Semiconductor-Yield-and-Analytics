@@ -74,7 +74,7 @@ enriched AS (
         SIGN(u.val - r.mu) AS side_of_mean,
         -- Row number within (line, sensor) ordered by time — for run detection
         ROW_NUMBER() OVER (
-            PARTITION BY u.sensor_id, u.line_id
+            PARTITION BY u.sensor_id, u.line_id, u.tester_id
             ORDER BY u.process_timestamp
         ) AS rn
     FROM unpivoted u
@@ -94,10 +94,10 @@ rule1 AS (
 rule2_base AS (
     SELECT *,
         SUM(CASE WHEN side_of_mean > 0 THEN 1 ELSE 0 END)
-            OVER (PARTITION BY sensor_id, line_id ORDER BY rn ROWS BETWEEN 8 PRECEDING AND CURRENT ROW)
+            OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn ROWS BETWEEN 8 PRECEDING AND CURRENT ROW)
             AS pos_run,
         SUM(CASE WHEN side_of_mean < 0 THEN 1 ELSE 0 END)
-            OVER (PARTITION BY sensor_id, line_id ORDER BY rn ROWS BETWEEN 8 PRECEDING AND CURRENT ROW)
+            OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn ROWS BETWEEN 8 PRECEDING AND CURRENT ROW)
             AS neg_run
     FROM enriched
 ),
@@ -111,11 +111,11 @@ rule2 AS (
 -- lag(5) and lag(4)...current must all increase or all decrease
 rule3_base AS (
     SELECT *,
-        LAG(val, 1) OVER (PARTITION BY sensor_id, line_id ORDER BY rn) AS v1,
-        LAG(val, 2) OVER (PARTITION BY sensor_id, line_id ORDER BY rn) AS v2,
-        LAG(val, 3) OVER (PARTITION BY sensor_id, line_id ORDER BY rn) AS v3,
-        LAG(val, 4) OVER (PARTITION BY sensor_id, line_id ORDER BY rn) AS v4,
-        LAG(val, 5) OVER (PARTITION BY sensor_id, line_id ORDER BY rn) AS v5
+        LAG(val, 1) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) AS v1,
+        LAG(val, 2) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) AS v2,
+        LAG(val, 3) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) AS v3,
+        LAG(val, 4) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) AS v4,
+        LAG(val, 5) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) AS v5
     FROM enriched
 ),
 rule3 AS (
@@ -131,15 +131,49 @@ rule3 AS (
         )
 ),
 
+-- Rule 4: 14 consecutive points alternating up and down
+rule4_step1 AS (
+    SELECT *,
+        -- 1 for up, -1 for down, 0 for flat
+        SIGN(val - LAG(val, 1) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn)) AS step_sign
+    FROM enriched
+),
+rule4_step2 AS (
+    SELECT *,
+        -- Check if the current direction is the exact opposite of the previous direction
+        CASE 
+            WHEN step_sign * LAG(step_sign, 1) OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn) < 0 
+            THEN 1 
+            ELSE 0 
+        END AS is_flip
+    FROM rule4_step1
+),
+rule4_base AS (
+    SELECT *,
+        -- Sum the flips over a rolling window of 12 rows. 
+        -- 12 consecutive flips = 14 alternating points.
+        SUM(is_flip) OVER (
+            PARTITION BY sensor_id, line_id, tester_id 
+            ORDER BY rn 
+            ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+        ) AS flip_count
+    FROM rule4_step2
+),
+rule4 AS (
+    SELECT *, 'Rule 4: 14 alternating' AS rule_name, 4 AS rule_number
+    FROM rule4_base
+    WHERE flip_count = 12
+),
+
 -- Rule 5: 2 of 3 consecutive points beyond ±2σ on same side
 rule5_base AS (
     SELECT *,
         -- Count of points > +2σ in this and the two preceding rows
         SUM(CASE WHEN z_score > 2 THEN 1 ELSE 0 END)
-            OVER (PARTITION BY sensor_id, line_id ORDER BY rn ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+            OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
             AS above_2sigma_run,
         SUM(CASE WHEN z_score < -2 THEN 1 ELSE 0 END)
-            OVER (PARTITION BY sensor_id, line_id ORDER BY rn ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+            OVER (PARTITION BY sensor_id, line_id, tester_id ORDER BY rn ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
             AS below_2sigma_run
     FROM enriched
 ),
@@ -162,6 +196,10 @@ all_violations AS (
     SELECT observation_id, process_timestamp, line_id, tester_id, shift, lot_id,
            wafer_status, sensor_id, val, mu, sigma, z_score, rule_name, rule_number
     FROM rule3
+    UNION ALL
+    SELECT observation_id, process_timestamp, line_id, tester_id, shift, lot_id,
+           wafer_status, sensor_id, val, mu, sigma, z_score, rule_name, rule_number
+    FROM rule4
     UNION ALL
     SELECT observation_id, process_timestamp, line_id, tester_id, shift, lot_id,
            wafer_status, sensor_id, val, mu, sigma, z_score, rule_name, rule_number
