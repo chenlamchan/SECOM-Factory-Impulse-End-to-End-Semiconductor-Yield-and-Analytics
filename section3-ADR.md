@@ -310,4 +310,36 @@ Since this is a fundamental design choice for your control strategy, it deserves
 * **Compute Grain:** The rules are applied sequentially. We have ensured that the `rn` (row number) used for these rules is strictly partitioned by asset to prevent "Rule 2" or "Rule 3" from accidentally counting points across different machines.
 * **Dashboard Logic:** The dashboard must now display the specific **Rule Number** and **Name** so maintenance teams know whether to look for a sudden spike (Rule 1) or a slow drift (Rule 3).
 
-***
+---
+### ADR-012: Derivation of Specification Limits for Capability Analysis
+
+**Status:** ACCEPTED
+
+**Context:**
+The SECOM dataset provides raw sensor readings and process timestamps but lacks explicit engineering **Specification Limits** (Upper Specification Limit/Lower Specification Limit). Process capability indices like $C_p$ and $C_{pk}$ are essential for evaluating process performance, but they require these external benchmarks to be meaningful. Without them, the system defaults to using statistical Control Limits ($UCL/LCL$) as proxies, which mathematically forces the $C_p$ to $1.0$, rendering the metric useless for identifying process capability improvements or degradations relative to a standard.
+
+**Decision:**
+Implement derived specification limits within the `gold_sensor_stats` dbt model by reverse-engineering $USL$ and $LSL$ from baseline statistics, assuming a centered process with a target $C_{pk} = 1.33$.
+
+* **Logic:**
+    * **$USL$**: $\mu + (3.99 \times \sigma)$
+    * **$LSL$**: $\mu - (3.99 \times \sigma)$
+
+**Rationale:**
+* **Industrial Benchmark:** A $C_{pk}$ of $1.33$ (representing a 4-sigma process) is the standard industry threshold for a "capable" process. By anchoring our specs here, we provide a realistic baseline for the "Capable/Marginal/Incapable" status badges in the UI.
+* **Centering Assumption:** In the absence of design intent (target values), assuming the Phase I baseline mean ($\mu$) is the process target represents the "golden state" of the equipment.
+* **Metric Utility:** Using a $3.99\sigma$ spread allows the $C_{pk}$ to fluctuate naturally based on real-time batch variance. If the batch standard deviation ($s$) is smaller than the baseline $\sigma$, the $C_{pk}$ will rise above $1.33$ (Green); if it increases, it will drop toward $1.0$ (Amber) or below (Red).
+* **Separation of Concerns:** This approach strictly separates **Control Limits** (used by the Nelson Rules to detect special cause variation) from **Specification Limits** (used to measure process health against a fixed standard).
+
+**Alternatives Considered:**
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Using Control Limits ($3\sigma$)** | Mathematically forces $C_p$ to $1.0$. It treats the current process spread as the "ideal" limit, providing no way to measure if the process is actually capable of meeting tighter requirements. |
+| **Manual Limit Entry** | Impractical for a simulated environment with multiple sensors across different lines and testers. |
+| **Historical Min/Max** | Highly sensitive to outliers in the Phase I data and does not provide a statistically sound basis for capability indices. |
+
+**Consequences:**
+* **Frozen Baseline:** These limits are calculated and "frozen" during the Phase I window (defined as the first 100 samples in `gold_sensor_stats.sql`).
+* **Batch Analysis:** The `SPCEngine.analyze_batch` function in `utils.py` must be updated to accept these four distinct parameters ($\mu$, $\sigma$, $USL$, $LSL$) to ensure the X-Chart and Capability Gauges are using the correct reference points.
+* **Operator Interpretation:** UI tooltips should clarify that these limits are derived from "Best Demonstrated Performance" during baseline, not necessarily from a customer-provided product blueprint.
+
