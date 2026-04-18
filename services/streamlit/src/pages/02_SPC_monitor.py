@@ -116,7 +116,13 @@ with tab_xchart:
             if series.empty:
                 continue
 
-            analysis = SPCEngine.analyze_batch(series, float(ref["mu"]), float(ref["sigma"]))
+            analysis = SPCEngine.analyze_batch(
+                series, 
+                float(ref["mu"]),
+                float(ref["sigma"]),
+                float(ref["usl"]), 
+                float(ref["lsl"])
+            )
 
             col_chart, col_metrics = st.columns([3, 1], gap="large")
             title = f"Line {b_line} | Tester {b_tester} — Sensor {sensor_sel}"
@@ -183,7 +189,7 @@ with tab_capability:
                 continue
             ref = ref_row.iloc[0]
             series = batch_df[sid].dropna()
-            cap = SPCEngine.capability_indices(series, float(ref["ucl"]), float(ref["lcl"]))
+            cap = SPCEngine.capability_indices(series, float(ref["usl"]), float(ref["lsl"]))
             cap_rows.append({
                 "Sensor": f"Sensor {sid}",
                 "Cp":  cap["Cp"],  "Cpk": cap["Cpk"],

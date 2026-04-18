@@ -341,7 +341,7 @@ with tab_validation:
                 fig.update_layout(
                     **PLOTLY_LAYOUT, 
                     height=360, 
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title=None)
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=1, title=None)
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:

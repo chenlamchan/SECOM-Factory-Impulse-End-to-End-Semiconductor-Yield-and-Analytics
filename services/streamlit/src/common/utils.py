@@ -259,7 +259,7 @@ class SPCEngine:
         return violations
 
     @staticmethod
-    def capability_indices(data: pd.Series,ucl: float,lcl: float,) -> dict[str, float]:
+    def capability_indices(data: pd.Series, usl: float, lsl: float,) -> dict[str, float]:
         """Compute Cp, Cpk, Cpu, Cpl."""
         clean = data.dropna()
         
@@ -270,9 +270,9 @@ class SPCEngine:
         
         if std == 0:
             return {"Cp": 0.0, "Cpk": 0.0, "Cpu": 0.0, "Cpl": 0.0}
-        cp  = (ucl - lcl) / (6 * std)
-        cpu = (ucl - mean) / (3 * std)
-        cpl = (mean - lcl) / (3 * std)
+        cp  = (usl - lsl) / (6 * std)
+        cpu = (usl - mean) / (3 * std)
+        cpl = (mean - lsl) / (3 * std)
         cpk = min(cpu, cpl)
         
         return {
@@ -283,7 +283,7 @@ class SPCEngine:
         }
 
     @staticmethod
-    def analyze_batch(series: pd.Series,mu: float,sigma: float,) -> dict:
+    def analyze_batch(series: pd.Series,mu: float,sigma: float, usl:float, lsl: float) -> dict:
         ucl = mu + 3 * sigma
         lcl = mu - 3 * sigma
         clean = series.dropna()
@@ -298,7 +298,7 @@ class SPCEngine:
             "ooc": unique_ooc_count > 0,
             "ooc_count": unique_ooc_count,
             "violations": list(violations.keys()),
-            "capability": SPCEngine.capability_indices(clean, ucl, lcl),
+            "capability": SPCEngine.capability_indices(clean, usl, lsl),
         }
     
     @staticmethod
