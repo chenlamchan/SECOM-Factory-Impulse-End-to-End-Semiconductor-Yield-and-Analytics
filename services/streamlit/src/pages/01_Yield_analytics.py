@@ -274,7 +274,7 @@ with tab_trend:
             yaxis=dict(title="Yield %", range=[0, 100]),
             yaxis2=dict(title="Overall DPPM", overlaying="y", side="right",
                         gridcolor="rgba(0,0,0,0)"),
-            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1)
+            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=0.5)
         )
         st.plotly_chart(fig, use_container_width=True, key='global_yield_chart')
     else:

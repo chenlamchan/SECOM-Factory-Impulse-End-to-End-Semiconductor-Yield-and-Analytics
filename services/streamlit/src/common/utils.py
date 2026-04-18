@@ -358,6 +358,14 @@ class SPCEngine:
             yaxis_range=[lcl - buf, ucl + buf],
             height=380,
             uirevision=f"spc_{sensor_id}",
+            xaxis=dict(fixedrange=True),
+            legend=dict(
+                orientation="h",    
+                yanchor="top",      
+                y=-0.15,            
+                xanchor="center",   
+                x=0.5               
+            )
         )
 
         return fig

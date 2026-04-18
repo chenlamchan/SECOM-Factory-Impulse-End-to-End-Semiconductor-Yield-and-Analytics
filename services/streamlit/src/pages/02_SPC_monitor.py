@@ -28,17 +28,25 @@ def load_sensor_refs():
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_violations(hours: int = 24, line_filter_val: str = "All"):
-    line_clause = f"AND line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
+    line_clause = f"AND v.line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
 
     return query_trino(f"""
-        SELECT sensor_id, rule_name, rule_number, line_id, shift,
-               COUNT(*) AS count, MAX(z_score) AS max_z,
-               MAX(process_timestamp) AS last_seen
-        FROM gold_spc_violations
-        WHERE process_timestamp >= NOW() - INTERVAL '{hours}' HOUR
+        WITH LatestPerGroup AS (
+            SELECT line_id, sensor_id, MAX(process_timestamp) as max_ts
+            FROM gold_spc_violations
+            GROUP BY line_id, sensor_id
+        )
+
+        SELECT v.sensor_id, v.rule_name, v.rule_number, v.line_id, v.shift,
+               COUNT(*) AS count, MAX(v.z_score) AS max_z,
+               MAX(v.process_timestamp) AS last_seen
+        FROM gold_spc_violations v
+        LEFT JOIN LatestPerGroup l 
+          ON v.line_id = l.line_id AND v.sensor_id = l.sensor_id
+        WHERE v.process_timestamp >= l.max_ts - INTERVAL '{hours}' HOUR
         {line_clause}
-        GROUP BY sensor_id, rule_name, rule_number, line_id, shift
-        ORDER BY rule_number, count DESC
+        GROUP BY v.sensor_id, v.rule_name, v.rule_number, v.line_id, v.shift
+        ORDER BY v.rule_number, count DESC
     """)
 
 # ---------------------------------------------------------------------------
@@ -221,15 +229,23 @@ with tab_health:
 # ---------------------------------------------------------------------------
     @st.cache_data(ttl=120, show_spinner=False)
     def load_health_matrix(line_filter_val:str = "All"):
-        line_clause = f"AND line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
+        line_clause = f"AND v.line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
 
         return query_trino(f"""
+            WITH LatestPerGroup AS (
+                SELECT line_id, sensor_id, MAX(process_timestamp) as max_ts
+                FROM gold_spc_violations
+                GROUP BY line_id, sensor_id
+            )
+
             SELECT
-                sensor_id,
-                CAST(process_timestamp AS DATE) AS process_date,
+                v.sensor_id,
+                CAST(v.process_timestamp AS DATE) AS process_date,
                 COUNT(*) AS violation_count
-            FROM gold_spc_violations
-            WHERE process_timestamp >= NOW() - INTERVAL '14' DAY
+            FROM gold_spc_violations v
+            LEFT JOIN LatestPerGroup l 
+            ON v.line_id = l.line_id AND v.sensor_id = l.sensor_id
+            WHERE v.process_timestamp >= l.max_ts - INTERVAL '14' DAY
             {line_clause}
             GROUP BY 1, 2
         """)
