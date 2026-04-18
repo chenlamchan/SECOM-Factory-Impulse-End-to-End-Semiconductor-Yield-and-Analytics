@@ -20,6 +20,34 @@ unpivoted AS (
     SELECT line_id, tester_id, '158', "158", process_timestamp FROM silver_data
 ),
 
+-- GLOBAL SPECS: Derived from Line A only
+line_a_baseline AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY sensor_id 
+               ORDER BY process_timestamp ASC
+           ) as rn
+    FROM unpivoted 
+    WHERE line_id = 'LINE_A' AND val IS NOT NULL
+),
+
+global_raw_stats AS (
+    SELECT sensor_id, AVG(val) as raw_mu, STDDEV(val) as raw_sigma
+    FROM line_a_baseline WHERE rn <= {{ phase1_size }} GROUP BY 1
+),
+
+global_specs AS (
+    SELECT 
+        b.sensor_id,
+        (AVG(b.val) + (3.99 * STDDEV(b.val))) as usl,
+        (AVG(b.val) - (3.99 * STDDEV(b.val))) as lsl
+    FROM line_a_baseline b
+    INNER JOIN global_raw_stats r ON b.sensor_id = r.sensor_id
+    WHERE b.rn <= {{ phase1_size }}
+      AND ABS(b.val - r.raw_mu) <= (3 * COALESCE(r.raw_sigma, 0.0001))
+    GROUP BY 1
+),
+
 -- Step 2: Identify the Phase I window
 baseline_data AS (
     SELECT *,
@@ -62,20 +90,21 @@ final_calculation AS (
 )
 
 SELECT 
-    line_id,
-    tester_id,
-    sensor_id,
-    mu,
-    sigma,
-    (mu + (3 * sigma)) as ucl,
-    (mu - (3 * sigma)) as lcl,
-    (mu + (2 * sigma)) as uwl, -- Upper Warning Limit
-    (mu - (2 * sigma)) as lwl, -- Lower Warning Limit
+    fc.line_id as line_id,
+    fc.tester_id as tester_id,
+    fc.sensor_id as sensor_id,
+    fc.mu as mu,
+    fc.sigma as sigma,
+    (fc.mu + (3 * fc.sigma)) as ucl,
+    (fc.mu - (3 * fc.sigma)) as lcl,
+    (fc.mu + (2 * fc.sigma)) as uwl, -- Upper Warning Limit
+    (fc.mu - (2 * fc.sigma)) as lwl, -- Lower Warning Limit
 
-    (mu + (3.99 * sigma)) as usl, --Derived Specification Limits targeting Cpk = 1.33
-    (mu - (3.99 * sigma)) as lsl, --Derived Specification Limits targeting Cpk = 1.33
+    gs.usl as usl, --Derived Specification Limits targeting Cpk = 1.33
+    gs.lsl as lsl, --Derived Specification Limits targeting Cpk = 1.33
 
     CURRENT_TIMESTAMP as frozen_at,
     'v1.0_phase1_frozen' as logic_version
-FROM final_calculation
-WHERE sample_size > 30 -- Ensure statistical significance
+FROM final_calculation fc
+INNER JOIN global_specs gs ON fc.sensor_id = gs.sensor_id
+WHERE fc.sample_size > 30 -- Ensure statistical significance
