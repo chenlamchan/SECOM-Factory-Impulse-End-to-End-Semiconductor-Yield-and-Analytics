@@ -69,19 +69,12 @@ with tab_xchart:
             return
             
         sensor_refs = refs[refs["sensor_id"] == sensor_sel]
-
         if line_sel != "All":
             sensor_refs = sensor_refs[sensor_refs["line_id"] == line_sel]
 
         if sensor_refs.empty:
             st.warning(f"No reference stats for sensor {sensor_sel} on {line_sel}.")
             return
-
-        ref_row = refs[refs["sensor_id"] == sensor_sel]
-        if ref_row.empty:
-            st.warning(f"No reference stats for sensor {sensor_sel}.")
-            return
-        ref = ref_row.iloc[0]
 
         fs = get_s3_filesystem()
         line_arg = None if line_sel == "All" else line_sel
@@ -91,26 +84,71 @@ with tab_xchart:
             st.warning("Awaiting batch data. Start the generator.")
             return
 
-        series = batch_df[sensor_sel].dropna().reset_index(drop=True)
-        analysis = SPCEngine.analyze_batch(series, float(ref["mu"]), float(ref["sigma"]))
+        if "line_id" not in batch_df.columns or "tester_id" not in batch_df.columns:
+            st.error("Batch data is missing 'line_id' or 'tester_id' columns. Cannot group by equipment.")
+            return
 
-        # Alarm status
-        if analysis["ooc"]:
-            st.error(f"⚠️ OUT OF CONTROL — {analysis['ooc_count']} violation(s): "
-                     f"{', '.join(analysis['violations'])}")
-        else:
-            st.success("✅ In control — no Nelson rule violations detected")
+        # Group incoming batch data by line and tester
+        grouped = batch_df.groupby(['line_id', 'tester_id'])
+        rendered_any = False
 
-        # X-chart
-        fig = SPCEngine.build_xbar_chart(series, float(ref["mu"]), float(ref["sigma"]), sensor_sel)
-        st.plotly_chart(fig, use_container_width=True)
+        for (b_line, b_tester), group_df in grouped:
+            ref_match = sensor_refs[
+                (sensor_refs['line_id'] == b_line) & 
+                (sensor_refs['tester_id'] == b_tester)
+            ]
 
-        # Quick stats
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Batch mean",    f"{analysis['mean']:.4f}")
-        c2.metric("Batch std",     f"{analysis['std']:.4f}")
-        c3.metric("Ref mean (μ)",  f"{float(ref['mu']):.4f}")
-        c4.metric("Ref σ",         f"{float(ref['sigma']):.4f}")
+            if ref_match.empty:
+                continue
+
+            rendered_any = True
+            ref = ref_match.iloc[0]
+
+            series = group_df[sensor_sel].dropna().reset_index(drop=True)
+            if series.empty:
+                continue
+
+            analysis = SPCEngine.analyze_batch(series, float(ref["mu"]), float(ref["sigma"]))
+
+            col_chart, col_metrics = st.columns([3, 1], gap="large")
+            title = f"Line {b_line} | Tester {b_tester} — Sensor {sensor_sel}"
+
+            with col_chart:
+                fig = SPCEngine.build_xbar_chart(
+                    series, 
+                    float(ref["mu"]), 
+                    float(ref["sigma"]), 
+                    sensor_sel, 
+                    title=title
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_metrics:
+                st.markdown(f"**Status**")
+                # Alarm status
+                if analysis["ooc"]:
+                    st.error(
+                        f"⚠️ **OUT OF CONTROL**\n\n"
+                        f"{analysis['ooc_count']} violation(s):\n\n"
+                        f"{', '.join(analysis['violations'])}"
+                    )
+                else:
+                    st.success("✅ **In control**\n\nNo Nelson rule violations detected.")
+
+                # Quick stats displayed in a 2x2 grid inside the right column
+                mc1, mc2 = st.columns(2)
+                mc1.metric("Batch mean", f"{analysis['mean']:.4f}")
+                mc2.metric("Batch std", f"{analysis['std']:.4f}")
+                
+                mc3, mc4 = st.columns(2)
+                mc3.metric("Ref mean (μ)", f"{float(ref['mu']):.4f}")
+                mc4.metric("Ref σ", f"{float(ref['sigma']):.4f}")
+
+            # Add a visual break between different equipment groupings
+            st.divider()
+
+        if not rendered_any:
+            st.warning("No matching reference stats found for the lines and testers in the current batch.")
 
     render_xchart()
 
