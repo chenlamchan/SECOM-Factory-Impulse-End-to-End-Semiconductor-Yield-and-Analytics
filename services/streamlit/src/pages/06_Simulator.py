@@ -200,13 +200,26 @@ with tab_validation:
     else:
         baseline_df = load_baseline()
 
+        lines_present = latest_df['line_id'].unique() if 'line_id' in latest_df.columns else ["Unknown"]
+
         st.success(
             f"Loaded batch: {len(latest_df):,} wafers | "
-            f"Generated at: {latest_df.get('generation_timestamp', pd.Series(['unknown'])).iloc[0]}"
+            f"Lines included: {', '.join(lines_present)}"
         )
 
-        drift_info = latest_df.get("applied_drift_features", pd.Series(["{}"])).iloc[0]
-        st.markdown(f"**Active drift on this batch:** `{drift_info}`")
+        st.markdown("**Batch Details per Line:**")
+        if 'line_id' in latest_df.columns:
+            for lid in sorted(lines_present):
+                line_data = latest_df[latest_df['line_id'] == lid]
+                ts = line_data.get('generation_timestamp', pd.Series(['unknown'])).iloc[0]
+                drift_info = line_data.get('applied_drift_features', pd.Series(["{}"])).iloc[0]
+                st.caption(f"🔹 **{lid}** — Generated at: `{ts}` | Active drift: `{drift_info}`")
+        else:
+            ts = latest_df.get('generation_timestamp', pd.Series(['unknown'])).iloc[0]
+            drift_info = latest_df.get("applied_drift_features", pd.Series(["{}"])).iloc[0]
+            st.caption(f"Generated at: `{ts}` | Active drift: `{drift_info}`")
+        
+        st.divider()
 
         batch_month_days = latest_df['Time'].dt.strftime('%m-%d').unique()
         matched_baseline_df = baseline_df[baseline_df['Time'].dt.strftime('%m-%d').isin(batch_month_days)]
@@ -214,7 +227,7 @@ with tab_validation:
         # Shared feature intersection
         numeric_base = matched_baseline_df.select_dtypes(include=["float64", "int64"]).columns
         numeric_latest = latest_df.select_dtypes(include=["float64", "int64"]).columns
-        shared = [c for c in numeric_base if c in numeric_latest and len(c) <= 5][:20]
+        shared = [c for c in numeric_base if c in numeric_latest and len(c) <= 5]
 
         if matched_baseline_df.empty:
             st.error("Could not match the generated batch dates to the baseline dataset.")
@@ -222,53 +235,117 @@ with tab_validation:
 
         # Wasserstein drift scores
         results = []
-        for feat in shared:
-            base_data   = matched_baseline_df[feat].dropna()
-            latest_data = latest_df[feat].dropna()
-            if len(base_data) < 5 or len(latest_data) < 5:
-                continue
-            base_std = float(base_data.std())
-            if base_std == 0:
-                continue
-            dist = wasserstein_distance(base_data.values, latest_data.values)
-            rel  = dist / base_std
-            results.append({
-                "Feature": f"Sensor {feat}",
-                "Drift Score": round(rel, 4),
-                "Status": "🚨 Drifted" if rel > REL_WASSERSTEIN_THRES else "✅ Stable",
-                "Drifted": rel > REL_WASSERSTEIN_THRES,
-            })
+        lines_to_process = lines_present if 'line_id' in latest_df.columns else ["Unknown"]
+
+        for lid in lines_to_process:
+            # Filter the generated data to just this line
+            line_data = latest_df[latest_df['line_id'] == lid] if lid != "Unknown" else latest_df
+            
+            for feat in shared:
+                base_data   = matched_baseline_df[feat].dropna()
+                latest_data_feat = line_data[feat].dropna()
+                
+                if len(base_data) < 5 or len(latest_data_feat) < 5:
+                    continue
+                
+                base_std = float(base_data.std())
+                if base_std == 0:
+                    continue
+                    
+                dist = wasserstein_distance(base_data.values, latest_data_feat.values)
+                rel  = dist / base_std
+                
+                results.append({
+                    "Line": lid,
+                    "Feature": f"Sensor {feat}",
+                    "Drift Score": round(rel, 4),
+                    "Status": "🚨 Drifted" if rel > REL_WASSERSTEIN_THRES else "✅ Stable",
+                    "Drifted": rel > REL_WASSERSTEIN_THRES,
+                })
 
         if results:
             drift_result = pd.DataFrame(results).sort_values("Drift Score", ascending=False)
         else:
-            drift_result = pd.DataFrame(columns=["Feature", "Drift Score", "Status", "Drifted"])
+            drift_result = pd.DataFrame(columns=["Line", "Feature", "Drift Score", "Status", "Drifted"])
 
         col_a, col_b = st.columns(2)
 
         with col_a:
             st.markdown("### Feature drift detection")
             st.dataframe(
-                drift_result[["Feature", "Drift Score", "Status"]],
+                drift_result[["Line", "Feature", "Drift Score", "Status"]],
                 use_container_width=True, hide_index=True,
             )
  
         with col_b:
             st.markdown("### Missing value topology")
-            base_nulls   = matched_baseline_df[shared].isnull().mean() * 100
-            latest_nulls = latest_df[shared].isnull().mean() * 100
-            null_df = pd.DataFrame({
-                "Baseline %":  base_nulls,
-                "Generated %": latest_nulls,
-            }).reset_index().rename(columns={"index": "Feature"})
-            fig = px.bar(
-                null_df, x="Feature", y=["Baseline %", "Generated %"],
-                barmode="group",
-                color_discrete_map={"Baseline %": GRAY, "Generated %": TEAL},
-                labels={"value": "% Missing"},
-            )
-            fig.update_layout(**PLOTLY_LAYOUT, height=360)
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # 1. Calculate baseline nulls
+            base_nulls = matched_baseline_df[shared].isnull().mean() * 100
+            
+            # 2. Build a list of series for each source
+            null_series_list = []
+            
+            # Add Baseline
+            base_series = base_nulls.copy()
+            base_series.name = "Baseline"
+            null_series_list.append(base_series)
+            
+            # Add each line's generated nulls separately
+            for lid in lines_to_process:
+                line_data = latest_df[latest_df['line_id'] == lid] if lid != "Unknown" else latest_df
+                line_nulls = line_data[shared].isnull().mean() * 100
+                line_series = line_nulls.copy()
+                line_series.name = f"Gen {lid}"
+                null_series_list.append(line_series)
+                
+            # Combine into a single wide DataFrame
+            null_df_wide = pd.concat(null_series_list, axis=1).reset_index().rename(columns={"index": "Feature"})
+            
+            # Filter out features where ALL sources are 0%
+            value_cols = [c for c in null_df_wide.columns if c != "Feature"]
+            null_df_wide = null_df_wide[(null_df_wide[value_cols] > 0).any(axis=1)]
+            
+            if not null_df_wide.empty:
+                # Sort descending by the highest generated missing percentage across any line
+                gen_cols = [c for c in value_cols if c.startswith("Gen")]
+                if gen_cols:
+                    null_df_wide["Max_Gen"] = null_df_wide[gen_cols].max(axis=1)
+                    null_df_wide = null_df_wide.sort_values(by=["Max_Gen", "Baseline"], ascending=[False, False])
+                    null_df_wide = null_df_wide.drop(columns=["Max_Gen"])
+                else:
+                    null_df_wide = null_df_wide.sort_values(by=["Baseline"], ascending=False)
+
+                # Melt the dataframe so Plotly can group it easily
+                null_df_melted = null_df_wide.melt(id_vars="Feature", var_name="Source", value_name="% Missing")
+                
+                # Assign specific colors to the lines for consistency
+                color_map = {
+                    "Baseline": GRAY,
+                    "Gen LINE_A": TEAL, 
+                    "Gen LINE_B": BLUE, 
+                    "Gen LINE_C": AMBER, 
+                    "Gen Unknown": TEAL
+                }
+
+                fig = px.bar(
+                    null_df_melted, 
+                    x="Feature", 
+                    y="% Missing", 
+                    color="Source",
+                    barmode="group",
+                    color_discrete_map=color_map,
+                )
+                
+                # Move legend above the chart to save horizontal space
+                fig.update_layout(
+                    **PLOTLY_LAYOUT, 
+                    height=360, 
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title=None)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No missing values detected in the evaluated features.")
  
         # Distribution comparison for top-drifted sensor
         if len(drift_result) > 0:

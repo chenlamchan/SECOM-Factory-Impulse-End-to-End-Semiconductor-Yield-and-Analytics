@@ -249,9 +249,10 @@ services:
         - spark_master_data:/opt/spark/data
       healthcheck:
         test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
-        interval: 30s
-        timeout: 10s
-        retries: 3
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 40s
 
   spark-worker:
     build:

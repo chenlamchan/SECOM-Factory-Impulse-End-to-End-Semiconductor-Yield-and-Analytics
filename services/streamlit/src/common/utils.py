@@ -36,7 +36,7 @@ PLOTLY_LAYOUT = dict(
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="sans-serif", size=13, color="#E6EDF3"),
     margin=dict(l=50, r=20, t=40, b=40),
-    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1),
+    # legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1),
     # xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
     # yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.1)"),
 )
@@ -159,14 +159,36 @@ def get_latest_generated_batch(
     """Shared function to fetch the most recently generated parquet file from MinIO."""
     try:
         fs.invalidate_cache()
-        prefix = f"{bucket.strip('/')}/line_id={line_id}" if line_id else bucket
-        files = sorted(fs.glob(f"{prefix}/**/*.parquet"), reverse=True)
+        base_path = bucket.strip('/')
 
-        if not files: 
-            return None
+        # Case 1: A specific line is selected
+        if line_id:
+            prefix = f"{base_path}/line_id={line_id}"
+            files = sorted(fs.glob(f"{prefix}/**/*.parquet"), reverse=True)
+            
+            if not files: 
+                return None
 
-        with fs.open(files[0], 'rb') as f:
-            return pd.read_parquet(f)
+            with fs.open(files[0], 'rb') as f:
+                return pd.read_parquet(f)
+        
+        # Case 2: "All" is selected (line_id is None)
+        else:
+            line_dirs = fs.glob(f"{base_path}/line_id=*")
+
+            latest_dfs = []
+            for directory in line_dirs:
+                # Get the latest file for this specific line
+                files = sorted(fs.glob(f"{directory}/**/*.parquet"), reverse=True)
+                if files:
+                    with fs.open(files[0], 'rb') as f:
+                        latest_dfs.append(pd.read_parquet(f))
+                        
+            if not latest_dfs:
+                return None
+                
+            # Combine the latest batch from all lines into a single DataFrame
+            return pd.concat(latest_dfs, ignore_index=True)
 
     except Exception as e:
         st.error(f"Unable to get latest batch, Error: {e}")

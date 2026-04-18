@@ -27,13 +27,16 @@ def load_sensor_refs():
     return query_trino("SELECT * FROM gold_sensor_stats")
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_violations(hours: int = 24):
+def load_violations(hours: int = 24, line_filter_val: str = "All"):
+    line_clause = f"AND line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
+
     return query_trino(f"""
         SELECT sensor_id, rule_name, rule_number, line_id, shift,
                COUNT(*) AS count, MAX(z_score) AS max_z,
                MAX(process_timestamp) AS last_seen
         FROM gold_spc_violations
         WHERE process_timestamp >= NOW() - INTERVAL '{hours}' HOUR
+        {line_clause}
         GROUP BY sensor_id, rule_name, rule_number, line_id, shift
         ORDER BY rule_number, count DESC
     """)
@@ -63,6 +66,15 @@ with tab_xchart:
         refs = load_sensor_refs()
         if refs.empty:
             st.info("Sensor reference stats not available. Run dbt models.")
+            return
+            
+        sensor_refs = refs[refs["sensor_id"] == sensor_sel]
+
+        if line_sel != "All":
+            sensor_refs = sensor_refs[sensor_refs["line_id"] == line_sel]
+
+        if sensor_refs.empty:
+            st.warning(f"No reference stats for sensor {sensor_sel} on {line_sel}.")
             return
 
         ref_row = refs[refs["sensor_id"] == sensor_sel]
@@ -170,14 +182,17 @@ with tab_capability:
 with tab_health:
 # ---------------------------------------------------------------------------
     @st.cache_data(ttl=120, show_spinner=False)
-    def load_health_matrix():
-        return query_trino("""
+    def load_health_matrix(line_filter_val:str = "All"):
+        line_clause = f"AND line_id = '{line_filter_val}'" if line_filter_val != "All" else ""
+
+        return query_trino(f"""
             SELECT
                 sensor_id,
                 CAST(process_timestamp AS DATE) AS process_date,
                 COUNT(*) AS violation_count
             FROM gold_spc_violations
             WHERE process_timestamp >= NOW() - INTERVAL '14' DAY
+            {line_clause}
             GROUP BY 1, 2
         """)
 
@@ -234,8 +249,10 @@ with tab_health:
 # ---------------------------------------------------------------------------
 with tab_violations:
 # ---------------------------------------------------------------------------
-    viols = load_violations(alarm_hours)
-    st.markdown(f"#### SPC violations — last {alarm_hours} hours")
+    viols = load_violations(alarm_hours, line_sel)
+
+    line_display_text = f"for {line_sel}" if line_sel != "All" else "across all lines"
+    st.markdown(f"#### SPC violations — last {alarm_hours} hours {line_display_text}")
 
     if not viols.empty:
         for rule_num in sorted(viols["rule_number"].unique()):
