@@ -9,15 +9,15 @@ WITH silver_data AS (
 -- 1. Standardize the Top 5 Sensors and carry the timestamp forward
 unpivoted AS (
     SELECT
-        line_id, tester_id, '59' AS sensor_id, "59" AS val, process_timestamp FROM silver_data
+        observation_id, line_id, tester_id, '59' AS sensor_id, "59" AS val, process_timestamp FROM silver_data
     UNION ALL 
-    SELECT line_id, tester_id, '103', "103", process_timestamp FROM silver_data
+    SELECT observation_id, line_id, tester_id, '103', "103", process_timestamp FROM silver_data
     UNION ALL 
-    SELECT line_id, tester_id, '511', "511", process_timestamp FROM silver_data
+    SELECT observation_id, line_id, tester_id, '511', "511", process_timestamp FROM silver_data
     UNION ALL 
-    SELECT line_id, tester_id, '424', "424", process_timestamp FROM silver_data
+    SELECT observation_id, line_id, tester_id, '424', "424", process_timestamp FROM silver_data
     UNION ALL 
-    SELECT line_id, tester_id, '158', "158", process_timestamp FROM silver_data
+    SELECT observation_id, line_id, tester_id, '158', "158", process_timestamp FROM silver_data
 ),
 
 -- GLOBAL SPECS: Derived from Line A only
@@ -25,7 +25,7 @@ line_a_baseline AS (
     SELECT *,
            ROW_NUMBER() OVER (
                PARTITION BY sensor_id 
-               ORDER BY process_timestamp ASC
+               ORDER BY process_timestamp ASC, observation_id ASC
            ) as rn
     FROM unpivoted 
     WHERE line_id = 'LINE_A' AND val IS NOT NULL
