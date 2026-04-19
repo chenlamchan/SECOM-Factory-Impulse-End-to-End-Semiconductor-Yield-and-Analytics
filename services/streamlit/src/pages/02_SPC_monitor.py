@@ -84,8 +84,6 @@ with tab_xchart:
             st.info("Showing **Current** Live Batch")
         else:
             st.warning(f"Showing Historical Batch **-{batch_offset}**")
-            
-    st.divider()
 
     @st.fragment(run_every="10s" if auto_refresh and batch_offset == 0 else None)
     def render_xchart():
