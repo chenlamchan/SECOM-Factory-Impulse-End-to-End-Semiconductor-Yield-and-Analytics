@@ -61,12 +61,12 @@ oee AS (
 
         -- Availability: shifts that ran / 3 expected shifts
         ROUND(
-            LEAST(shifts_with_data / {{scheduled_shift}}, 1.0) * 100, 2
+            LEAST(shifts_with_data / CAST({{scheduled_shift}} AS DOUBLE), 1.0) * 100, 2
         ) AS availability_pct,
 
         -- Performance: avg(actual / theoretical) across shifts
         ROUND(
-            LEAST(total_wafers_tested / {{theoretical_max_wafer}}, 1.0) * 100, 2
+            LEAST(total_wafers_tested / CAST({{theoretical_max_wafer}} AS DOUBLE), 1.0) * 100, 2
         ) AS performance_pct,
 
         -- Quality: FPY
