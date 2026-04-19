@@ -16,41 +16,64 @@ from common.utils import (
 apply_page_config("Executive Overview", "🏭")
  
 st.title("🏭 SECOM Manufacturing Command Center")
-st.caption(f"Last render: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_executive_data():
     try:
         kpis = query_trino("""
-            SELECT * FROM gold_daily_yield_metrics
-            ORDER BY process_date DESC LIMIT 1
-        """)
-        trend = query_trino("""
-            SELECT process_date, yield_percentage, ppm_defective, total_wafers_tested
+            WITH max_d AS (SELECT MAX(process_date) AS md FROM gold_daily_yield_metrics)
+            SELECT 
+                process_date,
+                SUM(total_wafers_tested) AS total_wafers_tested,
+                SUM(passed_wafers) AS passed_wafers,
+                SUM(failed_wafers) AS failed_wafers,
+                (SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE)) * 100 AS yield_percentage,
+                (SUM(failed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE)) * 1000000 AS ppm_defective
             FROM gold_daily_yield_metrics
-            ORDER BY process_date DESC LIMIT 30
+            WHERE process_date >= (SELECT md - INTERVAL '1' DAY FROM max_d)
+            GROUP BY process_date
+            ORDER BY process_date DESC
         """)
+        
+        trend = query_trino("""
+            SELECT 
+                process_date, 
+                (SUM(passed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE)) * 100 AS yield_percentage,
+                (SUM(failed_wafers) / CAST(NULLIF(SUM(total_wafers_tested), 0) AS DOUBLE)) * 1000000 AS ppm_defective,
+                SUM(total_wafers_tested) AS total_wafers_tested
+            FROM gold_daily_yield_metrics
+            GROUP BY process_date
+            ORDER BY process_date DESC 
+            LIMIT 30
+        """)
+
         alarms = query_trino("""
+            WITH max_t AS (SELECT MAX(process_timestamp) AS max_ts FROM gold_spc_violations)
             SELECT sensor_id, rule_name, COUNT(*) AS alarm_count, MAX(process_timestamp) AS last_seen
             FROM gold_spc_violations
-            WHERE process_timestamp >= NOW() - INTERVAL '24' HOUR
+            WHERE process_timestamp >= (SELECT max_ts FROM max_t) - INTERVAL '24' HOUR
             GROUP BY sensor_id, rule_name
             ORDER BY alarm_count DESC
             LIMIT 10
         """)
+
         quarantine = query_trino("""
+            WITH max_d AS (SELECT MAX(process_date) AS md FROM gold_shift_metrics)
             SELECT
                 SUM(quarantined_wafers) AS total_quarantined,
                 SUM(wafers_tested + quarantined_wafers) AS total_input
             FROM gold_shift_metrics
-            WHERE process_date = CURRENT_DATE
+            WHERE process_date = (SELECT md FROM max_d)
         """)
+
         oee_today = query_trino("""
+            WITH max_d AS (SELECT MAX(process_date) AS md FROM gold_oee_metrics)
             SELECT line_id, oee_pct, availability_pct, performance_pct, quality_pct
             FROM gold_oee_metrics
-            WHERE process_date = CURRENT_DATE
+            WHERE process_date = (SELECT md FROM max_d)
         """)
         return kpis, trend, alarms, quarantine, oee_today
+
     except Exception as e:
         st.error(f"Trino query failed: {e}")
         return (
@@ -62,6 +85,13 @@ def load_executive_data():
 @st.fragment(run_every="30s")
 def render_dashboard():
     kpis, trend, alarms, quarantine, oee_today = load_executive_data()
+
+    if max_ts is not None and not pd.isna(max_ts):
+        ts_str = pd.to_datetime(max_ts).strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        ts_str = "No data available"
+        
+    st.caption(f"Latest Production Timestamp: **{ts_str}**")
  
     # ------------------------------------------------------------------
     # Active alarm banner
@@ -83,25 +113,25 @@ def render_dashboard():
  
     if not kpis.empty:
         row = kpis.iloc[0]
-        yield_pct  = float(row.get("yield_percentage", 0))
-        dppm       = float(row.get("ppm_defective", 0))
-        wafers     = int(row.get("total_wafers_tested", 0))
+        yield_pct = float(row.get("yield_percentage", 0))
+        dppm = float(row.get("ppm_defective", 0))
+        wafers = int(row.get("total_wafers_tested", 0))
  
         # Delta vs previous day
-        if len(trend) >= 2:
-            prev = trend.iloc[1]
-            yield_delta = round(yield_pct - float(prev["yield_percentage"]), 2)
-            dppm_delta  = round(dppm  - float(prev["ppm_defective"]), 0)
+        if len(kpis) > 1:
+            yesterday_row = kpis.iloc[1]
+            yield_delta = round(yield_pct - float(yesterday_row["yield_percentage"]), 2)
+            dppm_delta  = round(dppm - float(yesterday_row["ppm_defective"]), 0)
         else:
             yield_delta = dppm_delta = None
  
-        col1.metric("Yield %",        f"{yield_pct:.2f}%", f"{yield_delta:+.2f}%" if yield_delta is not None else None)
-        col2.metric("DPPM",           f"{dppm:,.0f}",      f"{dppm_delta:+.0f}"   if dppm_delta  is not None else None)
-        col3.metric("Wafers Tested",  f"{wafers:,}")
+        col1.metric("Yield Today% (Overall)", f"{yield_pct:.2f}%", f"{yield_delta:+.2f}%" if yield_delta is not None else None)
+        col2.metric("DPPM Today (Overall)", f"{dppm:,.0f}", f"{dppm_delta:+.0f}" if dppm_delta  is not None else None)
+        col3.metric("Wafers Tested Today", f"{wafers:,}")
     else:
-        col1.metric("Yield %",  "—")
-        col2.metric("DPPM",     "—")
-        col3.metric("Wafers",   "—")
+        col1.metric("Yield %", "—")
+        col2.metric("DPPM", "—")
+        col3.metric("Wafers", "—")
  
     # Quarantine rate
     if not quarantine.empty and quarantine.iloc[0]["total_input"]:
@@ -112,15 +142,6 @@ def render_dashboard():
         col4.metric("Scrap / Quarantine", "—")
  
     col5.metric("SPC Alarms (24h)", len(alarms) if not alarms.empty else 0)
- 
-    # Data pipeline health — check if today has data
-    if not trend.empty:
-        latest_date = pd.to_datetime(trend.iloc[0]["process_date"])
-        lag_days = (datetime.now().date() - latest_date.date()).days
-        health_str = "Live ✓" if lag_days == 0 else f"{lag_days}d lag"
-        col6.metric("Pipeline Health", health_str)
-    else:
-        col6.metric("Pipeline Health", "No data")
  
     st.divider()
  
@@ -182,7 +203,7 @@ def render_dashboard():
     left2, right2 = st.columns([2, 3])
  
     with left2:
-        st.subheader("OEE by line (today)")
+        st.subheader("OEE by line (Latest Day)")
         if not oee_today.empty:
             for _, row in oee_today.iterrows():
                 oee_val = float(row["oee_pct"])
@@ -205,10 +226,10 @@ def render_dashboard():
             alarms_disp["last_seen"] = pd.to_datetime(alarms_disp["last_seen"]).dt.strftime("%H:%M")
             st.dataframe(
                 alarms_disp.rename(columns={
-                    "sensor_id":   "Sensor",
-                    "rule_name":   "Rule",
+                    "sensor_id": "Sensor",
+                    "rule_name": "Rule",
                     "alarm_count": "Count",
-                    "last_seen":   "Last seen",
+                    "last_seen": "Last seen",
                 }),
                 use_container_width=True,
                 hide_index=True,
