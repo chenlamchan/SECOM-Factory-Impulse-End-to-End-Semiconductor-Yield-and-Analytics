@@ -19,3 +19,5 @@ models:
 
 vars:
   spc_phase1_sample_size: 100
+  oee_scheduled_shifts_per_day: 1.0
+  oee_theoretical_max_wafers_per_day: 25
