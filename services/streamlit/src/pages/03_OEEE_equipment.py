@@ -2,7 +2,6 @@
 03_OEE_Equipment.py — OEE & Equipment Effectiveness
 ─────────────────────────────────────────────────────
 Per-line OEE gauges (Availability × Performance × Quality),
-shift-level throughput, and a timeline of line activity.
 """
 import pandas as pd
 import plotly.graph_objects as go
