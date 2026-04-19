@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from datetime import datetime
 from common.utils import (
-    apply_page_config, badge, query_trino, badge
+    apply_page_config, badge, query_trino, badge,
     PLOTLY_LAYOUT, TEAL, AMBER, RED, CORAL, GRAY,
 )
 

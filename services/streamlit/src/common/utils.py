@@ -173,8 +173,6 @@ def get_latest_generated_batch(
 
             with fs.open(files[batch_offset], 'rb') as f:
                 return pd.read_parquet(f)
-            
-            return pd.concat(dfs, ignore_index=True) if dfs else None
         
         # Case 2: "All" is selected (line_id is None)
         else:

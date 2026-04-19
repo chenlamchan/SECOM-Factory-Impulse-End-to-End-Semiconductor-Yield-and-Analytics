@@ -3,7 +3,6 @@
 ───────────────────────────────────────────
 Sensor failure Pareto, correlation heatmap on failing wafers,
 top-sensor scatter matrix, and failure stratification by line/shift.
-Heavy computations read silver parquet directly (bypass Trino).
 """
 import numpy as np
 import pandas as pd
@@ -14,8 +13,12 @@ from scipy.stats import pointbiserialr
 
 from common.utils import (
     AMBER, BLUE, CORAL, GRAY, PLOTLY_LAYOUT, RED, TEAL, PURPLE,
-    apply_page_config, get_s3_filesystem, query_trino,
+    apply_page_config, get_s3_filesystem, query_trino, 
 )
+
+from common.config import ServiceConfig
+
+service_config = ServiceConfig()
 
 apply_page_config("Failure Analysis", "🔍")
 st.title("🔍 Failure Analysis")
@@ -40,21 +43,6 @@ def load_failure_by_line():
         FROM gold_shift_metrics
         ORDER BY process_date DESC LIMIT 200
     """)
-
-@st.cache_resource(ttl=600, show_spinner=False)
-def load_silver_sample():
-    """Read silver parquet directly for ML-grade computations."""
-    try:
-        fs = get_s3_filesystem()
-        files = sorted(
-            fs.glob("warehouse/silver/**/*.parquet"), reverse=True
-        )[:30]
-        if not files:
-            return None
-        frames = [pd.read_parquet(f"s3://{f}", filesystem=fs) for f in files]
-        return pd.concat(frames, ignore_index=True)
-    except Exception:
-        return None
 
 # ---------------------------------------------------------------------------
 with st.spinner("Loading failure data …"):
@@ -91,7 +79,7 @@ with tab_pareto:
                 ))
         fig.update_layout(
             **PLOTLY_LAYOUT, height=600, barmode="overlay",
-            xaxis_title="|Correlation with fail label|",
+            xaxis_title="|Correlation with label|",
             yaxis=dict(autorange="reversed"),
             title="Failure Pareto — top 20 sensors",
         )
@@ -101,13 +89,14 @@ with tab_pareto:
             st.dataframe(pareto_df, use_container_width=True, hide_index=True)
 
         # Direction annotation
-        st.markdown("#### Failure direction")
-        for _, row in pareto_df.iterrows():
-            if row["effect_strength"] == "Strong":
-                direction_icon = "↑" if row["correlation"] > 0 else "↓"
-                st.markdown(
-                    f"**Sensor {row['sensor_id']}** — {direction_icon} {row['direction']}"
-                )
+        st.markdown("#### Top 5 Failure Directions")
+        
+        # Take the top 5 sensors regardless of strength (pareto_df is already sorted)
+        for _, row in pareto_df.head(5).iterrows():
+            direction_icon = "↑" if row["correlation"] > 0 else "↓"
+            st.markdown(
+                f"**Sensor {row['sensor_id']}** ({row['effect_strength']}) — {direction_icon} {row['direction']}"
+            )
     else:
         st.info("Pareto data not yet available. Run dbt models.")
 
@@ -121,18 +110,26 @@ with tab_heatmap:
         "Correlated sensors may share a common root cause."
     )
 
-    silver = load_silver_sample()
-    if silver is not None and "wafer_status" in silver.columns:
-        failed_df = silver[silver["wafer_status"] == "Fail"].copy()
-        top_sensors = (
-            pareto_df["sensor_id"].head(12).tolist()
-            if not pareto_df.empty
-            else ["59", "103", "511", "424", "158"]
-        )
-        available = [s for s in top_sensors if s in failed_df.columns]
+    top_sensors = (
+        pareto_df["sensor_id"].astype(str).head(10).tolist() 
+        if not pareto_df.empty 
+        else ["59", "103", "511", "424", "158"]
+    )
 
-        if len(available) >= 3:
-            corr = failed_df[available].corr()
+    trino_cols = ", ".join([f'"{s}"' for s in top_sensors])
+
+    sql = f"""
+        SELECT {trino_cols}
+        FROM silver_secom_reporting
+        WHERE wafer_status = 'Fail'
+    """
+
+    try:
+        failed_df = query_trino(sql, schema="silver")
+
+        if not failed_df.empty and len(failed_df.columns) >= 3:
+            corr = failed_df.corr()
+
             mask_labels = [f"S{s}" for s in corr.index]
 
             fig = go.Figure(go.Heatmap(
@@ -151,49 +148,164 @@ with tab_heatmap:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Not enough sensors with data for correlation matrix.")
-    else:
-        st.info("Silver data not accessible. Check MinIO connection and silver layer.")
+            
+    except Exception as e:
+        st.error(f"Failed to fetch correlation data from Trino: {e}")
 
 # ---------------------------------------------------------------------------
 with tab_scatter:
 # ---------------------------------------------------------------------------
-    st.subheader("Top sensor scatter matrix")
-    st.caption("Pass vs Fail coloured — helps identify decision boundaries visually.")
+    st.subheader("Feature Relationships & Decision Boundaries")
 
-    silver = load_silver_sample()
-    if silver is not None and "wafer_status" in silver.columns:
-        top5 = (
-            pareto_df["sensor_id"].head(5).tolist()
-            if not pareto_df.empty
-            else ["59", "103", "511", "424", "158"]
+    if not pareto_df.empty:
+
+        # --- PLOT 1: FEATURE-FEATURE SCATTER MATRIX ---
+        st.markdown("#### 1. Collinear Sensors (Failing Wafers)")
+        st.caption(
+            "Scatter matrix of failing sensors exhibiting strong multicollinearity **(|r| ≥ 0.70)**. "
+            "This reveals redundant sensors or underlying physical coupling in the equipment."
         )
-        avail5 = [s for s in top5 if s in silver.columns]
+        
+        if corr is not None and not corr.empty and len(corr.columns) >= 2:
+            
+            # 1. Apply Industry Standard Threshold
+            R_THRES = 0.70
+            corr_abs = corr.abs()
 
-        if len(avail5) >= 2:
-            sample = silver[avail5 + ["wafer_status"]].dropna(subset=avail5).sample(
-                min(500, len(silver)), random_state=42
-            )
-            # Rename for display
-            rename = {s: f"Sensor {s}" for s in avail5}
-            sample = sample.rename(columns=rename)
+            diagonal_mask = np.eye(len(corr_abs), dtype=bool)
+            corr_abs = corr_abs.mask(diagonal_mask, 0)
+            
+            # 2. Find all sensors that have at least one connection >= 0.70
+            # Sort them by their highest correlation value to prioritize the strongest couples
+            max_corrs = corr_abs.max()
+            collinear_sensors = max_corrs[max_corrs >= R_THRES].sort_values(ascending=False).index.tolist()
+            
+            if len(collinear_sensors) >= 2:
+                
+                # 3. UI Safeguard: Cap at 6 dimensions to prevent browser crash/unreadable grids
+                display_sensors = collinear_sensors[:6]
+                
+                if len(collinear_sensors) > 6:
+                    st.warning(
+                        f"⚠️ **Systemic anomaly detected:** {len(collinear_sensors)} sensors "
+                        f"exhibit strong collinearity (|r| ≥ {R_THRES}). "
+                        f"Displaying the top 6 to maintain chart readability."
+                    )
+                
+                trino_cols_feat = ", ".join([f'"{s}"' for s in display_sensors])
+                sql_feat = f"""
+                    SELECT wafer_status, {trino_cols_feat}
+                    FROM silver_secom_reporting
+                    WHERE wafer_status IS NOT NULL
+                    LIMIT 1000
+                """
+                
+                try:
+                    sample_feat = query_trino(sql_feat, schema="silver")
+                    if not sample_feat.empty:
+                        rename_feat = {s: f"S{s}" for s in display_sensors}
+                        sample_feat = sample_feat.rename(columns=rename_feat)
 
-            fig = px.scatter_matrix(
-                sample,
-                dimensions=list(rename.values()),
-                color="wafer_status",
-                color_discrete_map={"Pass": TEAL, "Fail": RED},
-                opacity=0.5,
-            )
-            fig.update_traces(diagonal_visible=False, marker=dict(size=3))
-            fig.update_layout(
-                **PLOTLY_LAYOUT, height=700,
-                title="Scatter matrix — top 5 failure-correlated sensors (sample 500 wafers)",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                        fig_feat = px.scatter_matrix(
+                            sample_feat,
+                            dimensions=list(rename_feat.values()),
+                            color="wafer_status",
+                            color_discrete_map={"Pass": TEAL, "Fail": RED},
+                            opacity=0.6,
+                        )
+                        fig_feat.update_traces(diagonal_visible=False, marker=dict(size=4))
+                        fig_feat.update_layout(**PLOTLY_LAYOUT, height=700, margin=dict(t=10, b=10))
+                        st.plotly_chart(fig_feat, use_container_width=True)
+                    else:
+                        st.warning("Could not fetch data for collinear sensors.")
+                except Exception as e:
+                    st.error(f"Failed to fetch feature-feature scatter data: {e}")
+            else:
+                st.success(
+                    f"✅ **No strong multicollinearity detected.** None of the top sensors "
+                    f"exceed the |r| ≥ {R_THRES} threshold with each other."
+                )
         else:
-            st.info("Insufficient sensor columns for scatter matrix.")
+            st.info("Correlation matrix from the Heatmap tab is unavailable.")
+
+        st.divider()
+
+        # --- PLOT 2: TARGET-FEATURE SCATTER ---
+        st.markdown("#### 2. Primary Decision Boundary (Target Predictors)")
+        st.caption(
+            "Explore sensors with a **Moderate or Strong** correlation to Wafer Failure. "
+            "Use the dropdowns to swap axes and look for clusters where red (Fail) isolates from blue (Pass)."
+        )
+        
+        # Filter Pareto for mathematically significant predictors
+        meaningful_predictors = pareto_df[
+            pareto_df["effect_strength"].isin(["Strong", "Moderate"])
+        ]["sensor_id"].astype(str).tolist()
+
+        if len(meaningful_predictors) >= 2:
+            # --- UI: Interactive Axis Selection ---
+            col_x, col_y = st.columns(2)
+            with col_x:
+                top1 = st.selectbox("X-Axis Sensor", options=meaningful_predictors, index=0)
+            with col_y:
+                top2 = st.selectbox("Y-Axis Sensor", options=meaningful_predictors, index=1)
+
+            if top1 == top2:
+                st.warning("Please select two different sensors for a meaningful 2D scatter plot.")
+            else:
+                trino_cols_target = f'"{top1}", "{top2}"'
+                sql_target = f"""
+                    SELECT wafer_status, {trino_cols_target}
+                    FROM silver_secom_reporting
+                    WHERE wafer_status IS NOT NULL
+                    LIMIT 1000
+                """
+                
+                try:
+                    sample_target = query_trino(sql_target, schema="silver")
+                    if not sample_target.empty:
+                        fig_target = px.scatter(
+                            sample_target,
+                            x=top1,
+                            y=top2,
+                            color="wafer_status",
+                            color_discrete_map={"Pass": TEAL, "Fail": RED},
+                            opacity=0.7,
+                            labels={
+                                top1: f"Sensor {top1}", 
+                                top2: f"Sensor {top2}"
+                            }
+                        )
+                        
+                        fig_target.update_layout(**PLOTLY_LAYOUT, height=500, margin=dict(t=10, b=10))
+                        fig_target.update_traces(marker=dict(size=6, line=dict(width=0.5, color='#161B22')))
+                        st.plotly_chart(fig_target, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Failed to fetch target scatter data: {e}")
+                
+        elif len(meaningful_predictors) == 1:
+            # Fallback: If only 1 good predictor exists, a 1D Box plot is the best visualization
+            top1 = meaningful_predictors[0]
+            st.info(f"Only one significant predictor found (Sensor {top1}). Displaying distribution instead of scatter.")
+            
+            sql_target = f'SELECT wafer_status, "{top1}" FROM silver_secom_reporting WHERE wafer_status IS NOT NULL LIMIT 1000'
+            
+            try:
+                sample_target = query_trino(sql_target, schema="silver")
+                if not sample_target.empty:
+                    fig_box = px.box(
+                        sample_target, x="wafer_status", y=top1, color="wafer_status",
+                        color_discrete_map={"Pass": TEAL, "Fail": RED},
+                        title=f"Distribution of Sensor {top1} (Sole Significant Predictor)"
+                    )
+                    fig_box.update_layout(**PLOTLY_LAYOUT, height=400)
+                    st.plotly_chart(fig_box, use_container_width=True)
+            except Exception as e:
+                st.error(f"Failed to fetch target data: {e}")
+        else:
+            st.info("No sensors with a 'Moderate' or 'Strong' association were found. A reliable decision boundary plot cannot be generated.")
     else:
-        st.info("Silver data not accessible.")
+        st.info("Pareto data required to identify target sensors.")
 
 # ---------------------------------------------------------------------------
 with tab_line:
@@ -205,10 +317,12 @@ with tab_line:
 
         with col_a:
             line_agg = line_df.groupby("line_id").agg(
-                ppm=("ppm_defective", "mean"),
-                yield_pct=("yield_pct", "mean"),
                 total_failed=("failed_wafers", "sum"),
+                total_tested=("wafers_tested", "sum"),
             ).reset_index()
+
+            line_agg["ppm"] = (line_agg["total_failed"] / line_agg["total_tested"].clip(lower=1)) * 1e6
+
             fig = px.bar(
                 line_agg, x="line_id", y="ppm",
                 color="ppm",
@@ -217,7 +331,7 @@ with tab_line:
                 labels={"ppm": "Avg DPPM", "line_id": "Line"},
             )
             fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False,
-                              title="Average DPPM by line")
+                              title="True Aggregate DPPM by line")
             st.plotly_chart(fig, use_container_width=True)
 
         with col_b:
@@ -239,7 +353,13 @@ with tab_line:
         # Rolling DPPM per line
         st.markdown("#### DPPM trend by line")
         if "process_date" in line_df.columns:
-            daily_line = line_df.groupby(["process_date", "line_id"])["ppm_defective"].mean().reset_index()
+            daily_line = line_df.groupby(["process_date", "line_id"]).agg(
+                daily_failed=("failed_wafers", "sum"),
+                daily_tested=("wafers_tested", "sum")
+            ).reset_index()
+
+            daily_line["ppm_defective"] = (daily_line["daily_failed"] / daily_line["daily_tested"].clip(lower=1)) * 1e6
+
             fig3 = px.line(
                 daily_line.sort_values("process_date"),
                 x="process_date", y="ppm_defective",
