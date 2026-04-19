@@ -18,6 +18,7 @@ from pathlib import Path
 class ServiceConfig(BaseSettings):
     minio_endpoint:str = Field(default="http://minio:9000")
     minio_bucket:str = Field(default="s3://data-lake")
+    minio_warehouse:str = Field(default="s3://warehouse")
     minio_access_key_file:str
     minio_secret_key_file:str
     db_path:str
