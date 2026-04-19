@@ -155,7 +155,9 @@ def get_s3_filesystem():
 def get_latest_generated_batch(
     fs: s3fs.S3FileSystem, 
     bucket:str = service_config.minio_bucket,
-    line_id: Optional[str] = None) -> Optional[pd.DataFrame]:
+    line_id: Optional[str] = None,
+    batch_offset: int = 0   # 0 is the current batch, 1 is the previous batch, 2 is two batches ago,
+    ) -> Optional[pd.DataFrame]:
     """Shared function to fetch the most recently generated parquet file from MinIO."""
     try:
         fs.invalidate_cache()
@@ -166,11 +168,13 @@ def get_latest_generated_batch(
             prefix = f"{base_path}/line_id={line_id}"
             files = sorted(fs.glob(f"{prefix}/**/*.parquet"), reverse=True)
             
-            if not files: 
+            if not files or batch_offset >= len(files): 
                 return None
 
-            with fs.open(files[0], 'rb') as f:
+            with fs.open(files[batch_offset], 'rb') as f:
                 return pd.read_parquet(f)
+            
+            return pd.concat(dfs, ignore_index=True) if dfs else None
         
         # Case 2: "All" is selected (line_id is None)
         else:
@@ -180,8 +184,8 @@ def get_latest_generated_batch(
             for directory in line_dirs:
                 # Get the latest file for this specific line
                 files = sorted(fs.glob(f"{directory}/**/*.parquet"), reverse=True)
-                if files:
-                    with fs.open(files[0], 'rb') as f:
+                if files and batch_offset < len(files):
+                    with fs.open(files[batch_offset], 'rb') as f:
                         latest_dfs.append(pd.read_parquet(f))
                         
             if not latest_dfs:
@@ -191,7 +195,7 @@ def get_latest_generated_batch(
             return pd.concat(latest_dfs, ignore_index=True)
 
     except Exception as e:
-        st.error(f"Unable to get latest batch, Error: {e}")
+        st.error(f"Unable to get batch, Error: {e}")
         return None
 
 
@@ -358,7 +362,7 @@ class SPCEngine:
             yaxis_range=[lcl - buf, ucl + buf],
             height=380,
             uirevision=f"spc_{sensor_id}",
-            xaxis=dict(fixedrange=True),
+            xaxis=dict(fixedrange=False),
             legend=dict(
                 orientation="h",    
                 yanchor="top",      

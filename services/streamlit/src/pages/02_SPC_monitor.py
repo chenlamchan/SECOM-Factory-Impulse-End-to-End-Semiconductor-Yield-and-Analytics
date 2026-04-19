@@ -56,7 +56,6 @@ with st.sidebar:
     st.header("Controls")
     sensor_sel  = st.selectbox("Sensor", TRACKED_SENSORS)
     line_sel    = st.selectbox("Line filter", ["All", "LINE_A", "LINE_B", "LINE_C"])
-    alarm_hours = st.slider("Alarm window (hours)", 1, 72, 24)
     auto_refresh = st.checkbox("Auto-refresh (10 s)", value=True)
 
 # ---------------------------------------------------------------------------
@@ -69,7 +68,26 @@ tab_xchart, tab_capability, tab_health, tab_violations = st.tabs([
 # ---------------------------------------------------------------------------
 with tab_xchart:
 # ---------------------------------------------------------------------------
-    @st.fragment(run_every="10s" if auto_refresh else None)
+    col_nav1, col_nav2 = st.columns([1, 4], vertical_alignment="bottom")
+
+    with col_nav1:
+        batch_offset = st.number_input(
+            "Traverse Batches", 
+            min_value=0, 
+            max_value=5, 
+            value=0, 
+            step=1,
+            help="0 = Current Batch. Increase the number to look back at previous batches."
+        )
+    with col_nav2:
+        if batch_offset == 0:
+            st.info("Showing **Current** Live Batch")
+        else:
+            st.warning(f"Showing Historical Batch **-{batch_offset}**")
+            
+    st.divider()
+
+    @st.fragment(run_every="10s" if auto_refresh and batch_offset == 0 else None)
     def render_xchart():
         refs = load_sensor_refs()
         if refs.empty:
@@ -86,7 +104,7 @@ with tab_xchart:
 
         fs = get_s3_filesystem()
         line_arg = None if line_sel == "All" else line_sel
-        batch_df = get_latest_generated_batch(fs, line_id=line_arg)
+        batch_df = get_latest_generated_batch(fs, line_id=line_arg, batch_offset=batch_offset)
 
         if batch_df is None or sensor_sel not in batch_df.columns:
             st.warning("Awaiting batch data. Start the generator.")
@@ -172,14 +190,48 @@ with tab_capability:
     refs = load_sensor_refs()
     fs   = get_s3_filesystem()
     line_arg = None if line_sel == "All" else line_sel
-    batch_df = get_latest_generated_batch(fs, line_id=line_arg)
 
-    if batch_df is None or refs.empty:
+    cap_mode = st.radio(
+        "Analysis Window", 
+        ["Current Batch (Short-term: Cp/Cpk)", "Last 7 Days (Long-term: Pp/Ppk)"], 
+        horizontal=True
+    )
+
+    is_historical = "Long-term" in cap_mode
+
+    if is_historical:
+        line_clause = f"AND s.line_id = '{line_sel}'" if line_sel != "All" else ""
+        hist_query = f"""
+            WITH LatestPerGroup AS (
+                SELECT line_id, MAX(process_timestamp) as max_ts
+                FROM silver_secom_reporting
+                GROUP BY line_id
+            )
+
+            SELECT "59", "103", "511", "424", "158"
+            FROM silver_secom_reporting s
+            LEFT JOIN LatestPerGroup lpg 
+                ON s.line_id = lpg.line_id
+            WHERE s.process_timestamp >= lpg.max_ts - INTERVAL '7' DAY
+            {line_clause}
+        """
+        # Note: Assuming 'silver' schema based on your DBT file names
+        batch_df = query_trino(hist_query, schema="silver")
+
+        st.markdown("#### Long-term Process Capability (Pp / Ppk) — Last 7 Days")
+        st.caption("Pp > 1.33 = capable | Ppk > 1.0 = centred | Ppk < 1 = process adjustment needed")
+        m_prefix = "P" # Used to dynamically rename columns to Pp/Ppk
+    
+    else:
+        batch_df = get_latest_generated_batch(fs, line_id=line_arg, batch_offset=0)
+
+        st.markdown("#### Short-term Process Capability (Cp / Cpk) — Current Batch")
+        st.caption("Cp > 1.33 = capable | Cpk > 1.0 = centred | Cpk < 1 = process adjustment needed")
+        m_prefix = "C"
+
+    if batch_df is None or refs.empty or batch_df.empty:
         st.info("Awaiting data.")
     else:
-        st.markdown("#### Process capability indices (Cp / Cpk) — current batch")
-        st.caption("Cp > 1.33 = capable | Cpk > 1.0 = centred | Cpk < 1 = process adjustment needed")
-
         cap_rows = []
         for sid in TRACKED_SENSORS:
             if sid not in batch_df.columns:
@@ -192,8 +244,8 @@ with tab_capability:
             cap = SPCEngine.capability_indices(series, float(ref["usl"]), float(ref["lsl"]))
             cap_rows.append({
                 "Sensor": f"Sensor {sid}",
-                "Cp":  cap["Cp"],  "Cpk": cap["Cpk"],
-                "Cpu": cap["Cpu"], "Cpl": cap["Cpl"],
+                f"{m_prefix}p":  cap["Cp"],  f"{m_prefix}pk": cap["Cpk"],
+                f"{m_prefix}pu": cap["Cpu"], f"{m_prefix}pl": cap["Cpl"],
                 "Status": (
                     badge("Capable", "ok") if cap["Cpk"] >= 1.33 else
                     badge("Marginal", "warn") if cap["Cpk"] >= 1.0 else
@@ -206,10 +258,10 @@ with tab_capability:
             st.write(cap_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
         # Gauge charts
-        st.markdown("#### Cpk gauges")
+        st.markdown(f"#### {m_prefix}pk gauges")
         cols = st.columns(len(cap_rows))
         for col, row in zip(cols, cap_rows):
-            cpk_val = float(row["Cpk"])
+            cpk_val = float(row[f"{m_prefix}pk"])
             color = TEAL if cpk_val >= 1.33 else (AMBER if cpk_val >= 1.0 else RED)
             fig = go.Figure(go.Indicator(
                 mode="gauge+number",
@@ -309,6 +361,10 @@ with tab_health:
 # ---------------------------------------------------------------------------
 with tab_violations:
 # ---------------------------------------------------------------------------
+    st.markdown("#### SPC violations")
+
+    alarm_hours = st.slider("Alarm window (hours)", 1, 72, 24, help="Filter violations by hours from the latest event")
+    
     viols = load_violations(alarm_hours, line_sel)
 
     line_display_text = f"for {line_sel}" if line_sel != "All" else "across all lines"
