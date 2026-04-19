@@ -17,7 +17,7 @@ apply_page_config("Executive Overview", "🏭")
  
 st.title("🏭 SECOM Manufacturing Command Center")
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner="Waiting for Trino cluster & fetching data...")
 def load_executive_data():
     try:
         kpis = query_trino("""
@@ -86,6 +86,8 @@ def load_executive_data():
 def render_dashboard():
     kpis, trend, alarms, quarantine, oee_today = load_executive_data()
 
+    max_ts = kpis.iloc[0]['process_date']
+
     if max_ts is not None and not pd.isna(max_ts):
         ts_str = pd.to_datetime(max_ts).strftime('%Y-%m-%d %H:%M:%S')
     else:
@@ -98,18 +100,17 @@ def render_dashboard():
     # ------------------------------------------------------------------
     if not alarms.empty:
         total_alarms = len(alarms)
-        st.markdown(
-            f'<div style="background:#3d0f0f;border:1px solid #A32D2D;border-radius:8px;'
-            f'padding:0.75rem 1rem;margin-bottom:1rem">'
-            f'⚠️ &nbsp;<b>{total_alarms}</b> active SPC alarm{"s" if total_alarms > 1 else ""} '
-            f'in the last 24 hours — see SPC Monitor for details.</div>',
-            unsafe_allow_html=True,
+        st.error(
+            f"**{total_alarms} active SPC alarm{'s' if total_alarms > 1 else ''}** in the last 24 hours — see SPC Monitor for details.",
+            icon="🚨"
         )
+ 
+    st.markdown("<br>", unsafe_allow_html=True) # Adds a little breathing room
  
     # ------------------------------------------------------------------
     # Top KPI row
     # ------------------------------------------------------------------
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1, col2, col3, col4, col5 = st.columns(5)
  
     if not kpis.empty:
         row = kpis.iloc[0]
@@ -125,8 +126,8 @@ def render_dashboard():
         else:
             yield_delta = dppm_delta = None
  
-        col1.metric("Yield Today% (Overall)", f"{yield_pct:.2f}%", f"{yield_delta:+.2f}%" if yield_delta is not None else None)
-        col2.metric("DPPM Today (Overall)", f"{dppm:,.0f}", f"{dppm_delta:+.0f}" if dppm_delta  is not None else None)
+        col1.metric("Yield Today% (Overall)", f"{yield_pct:.2f}%", f"{yield_delta:+.2f}%" if yield_delta is not None else None, help="Passed wafers / Total tested")
+        col2.metric("DPPM Today (Overall)", f"{dppm:,.0f}", f"{dppm_delta:+.0f}" if dppm_delta  is not None else None, delta_color="inverse", help="Defective Parts Per Million")
         col3.metric("Wafers Tested Today", f"{wafers:,}")
     else:
         col1.metric("Yield %", "—")
@@ -200,22 +201,23 @@ def render_dashboard():
     # ------------------------------------------------------------------
     # Line OEE summary + Active alarms table
     # ------------------------------------------------------------------
-    left2, right2 = st.columns([2, 3])
+    left2, right2 = st.columns([1, 1])
  
     with left2:
         st.subheader("OEE by line (Latest Day)")
         if not oee_today.empty:
             for _, row in oee_today.iterrows():
                 oee_val = float(row["oee_pct"])
-                color   = TEAL if oee_val >= 85 else (AMBER if oee_val >= 65 else RED)
-                st.markdown(
-                    f"**{row['line_id']}** &nbsp; "
-                    f"<span style='font-size:20px;font-weight:500;color:{color}'>{oee_val:.1f}%</span>"
-                    f" &nbsp; A:{row['availability_pct']:.0f}% "
-                    f"P:{row['performance_pct']:.0f}% "
-                    f"Q:{row['quality_pct']:.0f}%",
-                    unsafe_allow_html=True,
-                )
+
+                with st.container(border=True):
+                    st.markdown(f"##### {row['line_id']}")
+                    c1, c2, c3, c4 = st.columns(4)
+                    
+                    c1.metric("OEE", f"{oee_val:.1f}%")
+                    c2.metric("Availability", f"{row['availability_pct']:.0f}%")
+                    c3.metric("Performance", f"{row['performance_pct']:.0f}%")
+                    c4.metric("Quality", f"{row['quality_pct']:.0f}%")
+                
         else:
             st.info("OEE data not yet available. Run at least one full day of simulation.")
  
@@ -224,6 +226,8 @@ def render_dashboard():
         if not alarms.empty:
             alarms_disp = alarms.copy()
             alarms_disp["last_seen"] = pd.to_datetime(alarms_disp["last_seen"]).dt.strftime("%H:%M")
+            
+            max_count = int(alarms_disp['alarm_count'].max())
             st.dataframe(
                 alarms_disp.rename(columns={
                     "sensor_id": "Sensor",
@@ -233,9 +237,18 @@ def render_dashboard():
                 }),
                 use_container_width=True,
                 hide_index=True,
+                column_config={
+                    "Count": st.column_config.ProgressColumn(
+                        "Count",
+                        help="Number of times rule triggered",
+                        format="%d",
+                        min_value=0,
+                        max_value=max_count + 1,
+                    )
+                }
             )
         else:
-            st.success("No SPC alarms in the last 24 hours.")
+            st.success("No SPC alarms in the last 24 hours.", icon="✅")
  
  
 render_dashboard()
