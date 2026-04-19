@@ -6,6 +6,10 @@
     )
 }}
 
+{% set scheduled_shift = var('oee_scheduled_shifts_per_day', 1) %}
+{% set theoretical_max_wafer = var('oee_theoretical_max_wafers_per_day', 10) %}
+
+
 /*
   gold_oee_metrics
   ──────────────────
@@ -28,15 +32,6 @@ WITH shift_data AS (
     SELECT * FROM {{ ref('gold_shift_metrics') }}
 ),
 
--- Max throughput across all lines per shift as performance baseline
-throughput_reference AS (
-    SELECT
-        shift,
-        MAX(wafers_tested) AS max_shift_throughput
-    FROM shift_data
-    GROUP BY shift
-),
-
 -- Daily line totals
 daily_line AS (
     SELECT
@@ -48,10 +43,7 @@ daily_line AS (
         SUM(s.passed_wafers) AS total_passed,
         SUM(s.failed_wafers) AS total_failed,
         SUM(s.quarantined_wafers) AS total_quarantined,
-        SUM(s.lots_processed) AS total_lots,
-        SUM(
-            s.wafers_tested / CAST(NULLIF(t.max_shift_throughput, 0) AS DOUBLE)
-        ) AS performance_sum
+        SUM(s.lots_processed) AS total_lots
     FROM shift_data s
     LEFT JOIN throughput_reference t ON s.shift = t.shift
     GROUP BY s.process_date, s.line_id, s.tester_id
@@ -71,12 +63,12 @@ oee AS (
 
         -- Availability: shifts that ran / 3 expected shifts
         ROUND(
-            LEAST(shifts_with_data / 3.0, 1.0) * 100, 2
+            LEAST(shifts_with_data / {{scheduled_shift}}, 1.0) * 100, 2
         ) AS availability_pct,
 
         -- Performance: avg(actual / theoretical) across shifts
         ROUND(
-            LEAST(performance_sum / NULLIF(shifts_with_data, 0), 1.0) * 100, 2
+            LEAST(total_wafers_tested / {{theoretical_max_wafer}}, 1.0) * 100, 2
         ) AS performance_pct,
 
         -- Quality: FPY
