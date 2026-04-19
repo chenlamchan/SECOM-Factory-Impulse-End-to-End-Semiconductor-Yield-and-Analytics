@@ -9,7 +9,6 @@
 {% set scheduled_shift = var('oee_scheduled_shifts_per_day', 1) %}
 {% set theoretical_max_wafer = var('oee_theoretical_max_wafers_per_day', 10) %}
 
-
 /*
   gold_oee_metrics
   ──────────────────
@@ -35,18 +34,17 @@ WITH shift_data AS (
 -- Daily line totals
 daily_line AS (
     SELECT
-        s.process_date,
-        s.line_id,
-        s.tester_id,
-        COUNT(DISTINCT s.shift) AS shifts_with_data,
-        SUM(s.wafers_tested) AS total_wafers_tested,
-        SUM(s.passed_wafers) AS total_passed,
-        SUM(s.failed_wafers) AS total_failed,
-        SUM(s.quarantined_wafers) AS total_quarantined,
-        SUM(s.lots_processed) AS total_lots
-    FROM shift_data s
-    LEFT JOIN throughput_reference t ON s.shift = t.shift
-    GROUP BY s.process_date, s.line_id, s.tester_id
+        process_date,
+        line_id,
+        tester_id,
+        COUNT(DISTINCT shift) AS shifts_with_data,
+        SUM(wafers_tested) AS total_wafers_tested,
+        SUM(passed_wafers) AS total_passed,
+        SUM(failed_wafers) AS total_failed,
+        SUM(quarantined_wafers) AS total_quarantined,
+        SUM(lots_processed) AS total_lots
+    FROM shift_data
+    GROUP BY process_date, line_id, tester_id
 ),
 
 oee AS (
