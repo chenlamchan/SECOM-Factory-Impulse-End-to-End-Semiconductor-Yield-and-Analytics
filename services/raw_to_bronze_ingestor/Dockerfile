@@ -23,6 +23,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install runtime dependencies for psycopg2 (required in final stage too)
+RUN apt-get update && apt-get install -y libpq5 && rm -rf /var/lib/apt/lists/*
+
 # Copy only the installed dependencies from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
@@ -31,14 +34,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY ./src/ ./
-COPY ./.streamlit/ ./.streamlit/
-
-# Make sure scripts are on PATH
-ENV PATH=/root/.local/bin:$PATH
-
-RUN mkdir -p /app/data /app/db
 
 # Run as non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app /app/data /app/db
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app 
 
 USER appuser
+
+ENTRYPOINT ["python"]

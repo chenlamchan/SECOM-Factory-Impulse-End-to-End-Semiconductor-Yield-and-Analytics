@@ -1,3 +1,12 @@
+"""
+generator_daemon.py — Multi-line SECOM synthetic data generator.
+ 
+Runs LINE_A, LINE_B, and LINE_C as independent asyncio tasks, each with
+its own is_running state, drift config, fault injection, and MinIO path.
+Events are published to NATS JetStream with line_id metadata so Airflow
+can route them to the correct bronze partitions.
+"""
+
 import time
 import logging
 import random
@@ -9,7 +18,8 @@ import json
 import nats
 import asyncio
 from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
-from config_schema import StateStore, SimulationConfig, ServiceConfig
+from nats.js.api import StorageType, RetentionPolicy, DiscardPolicy
+from config_schema import LineConfig, StateStore, SimulationConfig, ServiceConfig
 
 # Configure Production Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,27 +39,37 @@ NATS_ENDPOINT = service_config.nats_endpoint
 NATS_SUBJECT = service_config.nats_subject
 NATS_STREAM = service_config.nats_stream_name
 
+SHIFTS = [
+    ("Day", 6, 14),
+    ("Swing", 14, 22),
+    ("Night", 22, 30), # 30 wraps to 06
+]
+
+def _current_shift(hour: int) -> str:
+    for name, start, end in SHIFTS:
+        if start <= hour < end or (end > 24 and (hour >= start or hour < end - 24)):
+            return name
+    return "Night"
+
 class DataGeneratorDaemon:
     def __init__(self):
         self.state_store = StateStore(DB_PATH)
-        logger.info("Loading baseline SECOM dataset into memory...")
-        self.baseline_df = pd.read_csv(RAW_DATA_PATH)
 
-        # Ensure 'Time' is parsed as datetime objects
-        self.baseline_df['Time'] = pd.to_datetime(self.baseline_df['Time'])
-        
-        # Create a helper column for grouping by calendar day
+        logger.info("Loading baseline SECOM dataset into memory...")
+        self.baseline_df = pd.read_csv(RAW_DATA_PATH, parse_dates=['Time'], date_format='%Y-%m-%d %H:%M:%S')
+
+        self.baseline_df = self.baseline_df.copy()
         self.baseline_df['Date_Block'] = self.baseline_df['Time'].dt.date
-        
-        # Get a sorted list of unique days in the dataset to iterate through
         self.unique_dates = sorted(self.baseline_df['Date_Block'].unique())
         
-        # Initialize pointer to track sequential progress
-        self.current_date_idx = 0
+        # Dictionary to track fault cooldowns independently and next run time per line
+        self.fault_cooldowns: dict[str, datetime.datetime] = {}
+        self.next_run_times: dict[str, datetime.datetime] = {}
 
-        self.numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = self.baseline_df.select_dtypes(include=[np.number]).columns.tolist()
+
         # Exclude targets or timestamp identifiers from noise/drift
-        self.features_to_mutate = [c for c in self.numeric_cols if c not in ['Time', 'Target', 'Pass_Fail']]
+        self.features_to_mutate = [c for c in numeric_cols if c not in ['Time', 'Target', 'Pass/Fail']]
         self.feature_stds = self.baseline_df[self.features_to_mutate].std()
         
         # S3 Filesystem setup for MinIO
@@ -60,9 +80,9 @@ class DataGeneratorDaemon:
         )
 
         self.nc = None
-        self.jc = None
+        self.js = None
 
-    async def connect_nats(self):
+    async def _connect_nats(self):
         """Establish connection to the NATS broker."""
         try:
             self.nc = await nats.connect(NATS_ENDPOINT)
@@ -70,42 +90,49 @@ class DataGeneratorDaemon:
 
             # Ensure the stream exists (Idempotent operation)
             try:
-                await self.js.add_stream(name=NATS_STREAM, subjects=[NATS_SUBJECT])
+                await self.js.add_stream(
+                    name=NATS_STREAM, 
+                    subjects=[NATS_SUBJECT],
+                    )
                 logger.info(f"JetStream 'SECOM_PIPELINE' initialized for subject '{NATS_SUBJECT}'")
             except Exception as e:
-                # If it already exists, this is fine, but log other errors
-                logger.debug(f"Stream setup check: {e}")
+                logger.debug("Stream already exists: %s", e)
+            logger.info("Connected to NATS at %s", NATS_ENDPOINT)
 
-            logger.info(f"Connected to NATS broker at {NATS_ENDPOINT}")
         except Exception as e:
             logger.error(f"Failed to connect to NATS: {e}")
             self.nc = None
             self.js = None
 
-    def _get_next_day_block(self) -> pd.DataFrame:
+    def _next_day_block(self, lc:LineConfig) -> pd.DataFrame:
         """Samples all sequential rows for a specific day to preserve time-series behavior."""
         if not self.unique_dates:
             return self.baseline_df.copy() # Fallback if dates couldn't be parsed
-        
-        # Identify the date for this cycle
-        target_date = self.unique_dates[self.current_date_idx]
-        
-        # Filter the dataframe for the targeted day
-        day_block_df = self.baseline_df[self.baseline_df['Date_Block'] == target_date].copy()
-        
-        # Advance the index, loop back to 0 if we hit the end of the dataset
-        self.current_date_idx = (self.current_date_idx + 1) % len(self.unique_dates)
-        
-        # Drop the helper column before returning so it doesn't leak into downstream storage
-        return day_block_df.drop(columns=['Date_Block'])
 
-    def apply_mutations(self, df: pd.DataFrame, config: SimulationConfig) -> pd.DataFrame:
+        target_date = self.unique_dates[lc.date_ptr % len(self.unique_dates)] # Safeguarding the Target Date, belt-and-suspenders safety net
+        lc.date_ptr += 1
+
+        if lc.date_ptr >= len(self.unique_dates):
+            lc.date_ptr = 0
+            lc.year_offset += 1
+        
+        df = self.baseline_df[self.baseline_df["Date_Block"] == target_date].copy().drop(columns=["Date_Block"])
+        
+        if lc.year_offset > 0:
+            df['Time'] = df['Time'] + pd.DateOffset(years=lc.year_offset)
+        
+        
+        return df
+
+    def _apply_mutations(self, df: pd.DataFrame, lc: LineConfig) -> pd.DataFrame:
         """Applies controlled jitter and targeted sigma shifts."""
-        # 1. Controlled Jitter (Micro-noise)
-        if config.jitter_variance > 0:
+        # 1. Controlled Jitter (Micro-noise) - LOCAL standard deviation for this specific day
+        if lc.jitter_variance > 0:  
+            local_stds = df[self.features_to_mutate].std().fillna(0)
+
             noise = np.random.normal(
                 loc=0, 
-                scale=self.feature_stds * config.jitter_variance, 
+                scale=local_stds * lc.jitter_variance, 
                 size=(len(df), len(self.features_to_mutate))
             )
             # Only apply noise where data is not null to preserve missingness topology
@@ -114,94 +141,125 @@ class DataGeneratorDaemon:
                 ~mask, df[self.features_to_mutate] + noise
             )
 
-        # 2. Targeted Drift (Sigma Shift)
-        for feature, sigma in config.drift_config.items():
+        # 2. Targeted Drift (Sigma Shift) - GLOBAL feature_stds, equipment failure/drift should be an absolute physical shift, not a local one.
+        for feature, sigma in lc.drift_config.items():
             if feature in self.features_to_mutate:
-                shift_value = self.feature_stds[feature] * sigma
-                df[feature] = df[feature] + shift_value
+                df[feature] = df[feature] + self.feature_stds[feature] * sigma
 
         return df
 
-    async def publish_metadata(self, file_path: str, batch_size: int, config: SimulationConfig, timestamp: str):
-        """Publishes the generation event payload to NATS."""
-        if not self.nc or self.nc.is_closed:
-            await self.connect_nats()
+    def _next_lot_id(self, lc:LineConfig) -> str:
+        lc.lot_counter += 1
+        return f"{lc.line_id}-LOT-{lc.lot_counter:05d}"
 
-        if self.js:
-            # Construct the event payload contract
-            payload = {
-                "event_type": "TEST_COMPLETED",
-                "file_path": file_path,
-                "batch_size": batch_size,
-                "is_synthetic": True,
-                "generation_timestamp": timestamp,
-                "applied_drift_features": config.drift_config
-            }
-            
-            try:
-                # NATS requires bytes
-                message = json.dumps(payload).encode('utf-8')
-                ack = await self.js.publish(NATS_SUBJECT, message)
-                
-                logger.info(f"Published metadata to NATS subject '{NATS_SUBJECT}', Sequence: {ack.seq})")
-            except Exception as e:
-                logger.error(f"Error publishing to NATS: {e}")
+    async def run_line_cycle(self, line_id: str, lc: LineConfig) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
 
-    async def run_cycle(self):
-        config = self.state_store.get_config()
-        
-        if not config.is_running:
-            logger.info("Daemon sleeping. State: is_running=False")
-            await asyncio.sleep(5)
+        next_run = self.next_run_times.get(line_id)
+        if next_run and now < next_run:
             return
 
-        logger.info(f"Generating batch of {config.batch_size} wafers...")
-        
-        # 1. Generate Data
-        batch_df = self._get_next_day_block()
-        mutated_df = self.apply_mutations(batch_df, config)
+        cooldown_end = self.fault_cooldowns.get(line_id)
+        if cooldown_end and now < cooldown_end:
+            logger.debug("[%s] down due to fault (wakes at %s)", line_id, cooldown_end.strftime('%H:%M:%S'))
+            return
 
-        if len(batch_df) > config.batch_size:
+        if lc.fault_injection_enabled and random.random() < lc.fault_probability:
+            logger.warning("[%s] Fault injected — pausing for %ds", line_id, lc.fault_duration_seconds)
+            self.state_store.log_event(line_id, "FAULT", {"duration_s": lc.fault_duration_seconds})
+            self.fault_cooldowns[line_id] = now + datetime.timedelta(seconds=lc.fault_duration_seconds)
+            return 
+
+        batch_df = self._next_day_block(lc)
+        mutated_df = self._apply_mutations(batch_df, lc)
+
+        if len(batch_df) > lc.batch_size:
             # Sample N rows and sort chronologically
-            mutated_df = mutated_df.sample(n=config.batch_size).sort_values('Time')
-
-        # 2. Inject Provenance Metadata
-        now = datetime.datetime.now(datetime.timezone.utc)
-        iso_timestamp = now.isoformat()
+            mutated_df = mutated_df.sample(n=lc.batch_size).sort_values('Time')
+        
+        lot_id = self._next_lot_id(lc)
+        shift = _current_shift(mutated_df['Time'].dt.hour.iloc[0])
+        iso_ts = now.isoformat()
 
         mutated_df = mutated_df.copy()
 
-        mutated_df['is_synthetic'] = True
-        mutated_df['generation_timestamp'] = now
-        mutated_df['applied_drift_features'] = json.dumps(config.drift_config)
+        mutated_df["line_id"] = line_id
+        mutated_df["tester_id"] = lc.tester_id
+        mutated_df["shift"] = shift
+        mutated_df["lot_id"] = lot_id
+        mutated_df["is_synthetic"] = True
+        mutated_df["generation_timestamp"] = now
+        mutated_df["applied_drift_features"] = json.dumps(lc.drift_config)
 
         # 3. Write to MinIO (Hive Partitioned)
-        partition_path = f"{S3_BUCKET}/year={now.year}/month={now.month:02d}/day={now.day:02d}"
-        file_path = f"{partition_path}/batch_{int(now.timestamp())}.parquet"
+        partition = (
+            f"{S3_BUCKET}/line_id={line_id}"
+            f"/year={now.year}/month={now.month:02d}/day={now.day:02d}"
+        )
 
-        success = False
-        
+        file_path = f"{partition}/batch_{int(now.timestamp())}.parquet"
+
         try:
             await asyncio.to_thread(mutated_df.to_parquet, file_path, filesystem=self.fs, index=False)
-            logger.info(f"Successfully wrote batch to {file_path}")
-            success = True
+            logger.info("[%s] Wrote batch (%d wafers) → %s", line_id, len(mutated_df), file_path)
         except Exception as e:
-            logger.error(f"Failed to write to MinIO: {e}")
+            logger.error("[%s] MinIO write failed: %s", line_id, e)
+            return
 
-        # 4. Publish Event to Message Broker
-        if success:
-            await self.publish_metadata(file_path, config.batch_size, config, iso_timestamp)  
-
-        # Sleep for the configured interval
-        await asyncio.sleep(config.generation_interval_seconds)
+        if self.js:
+            payload = {
+                "event_type": "TEST_COMPLETED",
+                "file_path": f"s3://{file_path}",
+                "batch_size": len(mutated_df),
+                "line_id": line_id,
+                "tester_id": lc.tester_id,
+                "shift": shift,
+                "lot_id": lot_id,
+                "is_synthetic": True,
+                "generation_timestamp": iso_ts,
+                "applied_drift_features": lc.drift_config,
+            }
+   
+        await self.publish_metadata(payload)  
+        self.state_store.log_event(line_id, "BATCH", {"lot_id": lot_id, "wafers": len(mutated_df)})
+        self.next_run_times[line_id] = now + datetime.timedelta(seconds=lc.generation_interval_seconds)
+    
+    async def publish_metadata(self, payload: dict) -> None:
+        """Publishes the generation event payload to NATS."""
+        try:
+            # NATS requires bytes
+            message = json.dumps(payload).encode('utf-8')
+            ack = await self.js.publish(NATS_SUBJECT, message)
+            
+            logger.info("[%s] NATS ack seq=%d", payload.get('line_id',"UNKNOWN"), ack.seq)
+        except Exception as e:
+            logger.error("[%s] NATS publish failed: %s", payload.get('line_id',"UNKNOWN"), e)
 
     async def start(self):
         """Main async entrypoint."""
-        await self.connect_nats()
+        await self._connect_nats()
         logger.info("Generator Daemon Started.")
+
         try:
             while True:
-                await self.run_cycle()
+                config: SimulationConfig = self.state_store.get_config()
+
+                tasks = []
+                for line_id, lc in config.lines.items():
+                    if lc.is_running:
+                        tasks.append(self.run_line_cycle(line_id, lc))
+                    else:
+                        logger.debug("[%s] idle", line_id)
+                
+                if tasks:
+                    await asyncio.gather(
+                        *tasks, 
+                        # return_exceptions=True,   # Comment for Fail Fast
+                        )
+                
+                self.state_store.update_config(config)
+                await asyncio.sleep(1)
+                
         finally:
             if self.nc and not self.nc.is_closed:
                 await self.nc.drain()

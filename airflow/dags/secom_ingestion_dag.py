@@ -27,6 +27,9 @@ SUBJECT = config.nats_subject
 CONSUMER_NAME = "airflow_bronze_ingestion_consumer"
 BATCH_THRESHOLD = 5
 DBT_PROJECT_PATH = os.environ.get('DBT_PROJECT_PATH', '/opt/airflow/dbt_analytics')
+MINIO_USER_FILEPATH = os.environ.get('MINIO_USER_FILEPATH')
+MINIO_PWD_FILEPATH = os.environ.get('MINIO_PWD_FILEPATH')
+AIRFLOW_DB_PWD_FILEPATH = os.environ.get('AIRFLOW_DB_PWD_FILEPATH')
 
 async def _pull_nats_messages(**context):
     """Async worker to connect to NATS JetStream and pull batch paths."""
@@ -58,12 +61,10 @@ async def _pull_nats_messages(**context):
         for msg in msgs:
             payload = json.loads(msg.data.decode())
             raw_path = payload.get("file_path", "")
-            
-            # Spark requires s3a:// prefix for the S3AFileSystem, but the generator outputs s3://
-            if raw_path.startswith("s3://"):
-                raw_path = raw_path.replace("s3://", "s3a://", 1)
-            
-            file_paths.append(raw_path)
+
+            clean_path = raw_path.replace("s3a://", "").replace("s3://", "")
+
+            file_paths.append(clean_path)
             
             await msg.ack()
             logger.info(f"Acked NATS message, path queued: {raw_path}")
@@ -118,30 +119,43 @@ with DAG(
 
     # 2. Spark Job: Raw to Bronze
     # We pull the paths from XCom and pass them as an application argument
-    ingest_to_bronze = SparkSubmitOperator(
-        task_id='spark_raw_to_bronze',
-        conn_id='spark_default', 
-        application='/opt/airflow/spark_jobs/ingest_bronze.py',
-        name='secom_ingest_bronze',
-        application_args=[
-            "--file-paths", 
-            "{{ ti.xcom_pull(key='bronze_file_paths', task_ids='pull_nats_batches') }}"
+    ingest_to_bronze = DockerOperator(
+        task_id='pyiceberg_raw_to_bronze',
+        image='pyiceberg-ingestor:latest',
+        command=[
+            "/app/ingest_bronze.py",
+            "--file-paths", "{{ ti.xcom_pull(key='bronze_file_paths', task_ids='pull_nats_batches') }}"
         ],
-        conf={
-            "spark.executor.memory": "1g",
-            "spark.executor.cores": "2",
-            "spark.cores.max":"2",
-            "spark.executor.memoryOverhead": "512m",
-
-            "spark.jars.packages": (
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,"
-                "org.apache.hadoop:hadoop-aws:3.3.4,"
-                "org.postgresql:postgresql:42.6.0"
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',
+        auto_remove=True,
+        docker_url='unix://var/run/docker.sock',
+        mounts=[
+            Mount(
+                source=MINIO_USER_FILEPATH,
+                target="/run/secrets/minio_user",
+                type="bind",
+                read_only=True,
             ),
-            # Crucial for Iceberg
-            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-            "spark.sql.catalog.secom_catalog": "org.apache.iceberg.spark.SparkCatalog",
-            "spark.sql.catalog.secom_catalog.warehouse": "s3a://data-lake/warehouse",
+            Mount(
+                source=MINIO_PWD_FILEPATH,
+                target="/run/secrets/minio_password",
+                type="bind",
+                read_only=True,
+            ),
+            Mount(
+                source=AIRFLOW_DB_PWD_FILEPATH,
+                target="/run/secrets/airflow_db_password",
+                type="bind",
+                read_only=True,
+            ),
+        ],
+        environment={
+            "MINIO_ENDPOINT": "http://minio:9000",
+            "MINIO_ACCESS_KEY_FILE": "/run/secrets/minio_user",
+            "MINIO_SECRET_KEY_FILE": "/run/secrets/minio_password",
+            "AIRFLOW_DB_PASSWORD_FILE": "/run/secrets/airflow_db_password",
+            "CATALOG_NAME": "data_catalog",
+            "CATALOG_USER": "airflow",
         }
     )
 

@@ -129,6 +129,7 @@ services:
   postgres:
     image: postgres:15
     container_name: postgres
+    stop_grace_period: 1m
     environment:
       POSTGRES_USER_FILE: /run/secrets/postgres_user
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -171,7 +172,7 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
-    command: "-js"
+    command: "-js -sd /data"
     volumes: 
       - nats-data:/data
 
@@ -203,11 +204,14 @@ services:
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
     command: python generator_daemon.py
 
-  generator-ui:
+# ============================================================================
+# Streamlit (UI)
+# ============================================================================
+  ui:
     build:
-      context: ./services/synthetic-data-generator
+      context: ./services/streamlit
       dockerfile: Dockerfile
-    container_name: generator-ui
+    container_name: ui
     ports:
       - "8501:8501"
     env_file: .env
@@ -221,42 +225,15 @@ services:
         condition: service_healthy
       nats:
         condition: service_started
-    secrets:
-      - minio_user
-      - minio_password
-    volumes:
-      - generator_data:/app/db
-      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
-    command: streamlit run streamlit_app.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
-
-# ============================================================================
-# Streamlit (UI)
-# ============================================================================
-  ui:
-    build:
-      context: ./services/streamlit
-      dockerfile: Dockerfile
-    container_name: ui
-    ports:
-      - "8502:8502"
-    env_file: .env
-    environment:
-      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
-      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
-      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
-      DB_PATH: /app/db/simulation_state.db
-    depends_on:
-      minio:
+      trino:
         condition: service_healthy
-      nats:
-        condition: service_started
     secrets:
       - minio_user
       - minio_password
     volumes:
       - generator_data:/app/db
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
-    command: streamlit run home.py --browser.gatherUsageStats false --server.port=8502 --server.address=0.0.0.0
+    command: streamlit run home.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
 # Spark (Processing)
@@ -271,10 +248,11 @@ services:
       volumes:
         - spark_master_data:/opt/spark/data
       healthcheck:
-        test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
-        interval: 30s
-        timeout: 10s
-        retries: 3
+        test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080')\" || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 90s
 
   spark-worker:
     build:
@@ -295,10 +273,22 @@ services:
     volumes:
       - spark_worker_data:/opt/spark/data
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:8081" ]
       interval: 30s
       timeout: 10s
       retries: 3
+
+# ============================================================================
+# Ephemeral Ingestor (Builds the image for Airflow DockerOperator)
+# ============================================================================
+  bronze-ingestor:
+    build:
+      context: ./services/raw_to_bronze_ingestor
+      dockerfile: Dockerfile
+    container_name: bronze-ingestor
+    image: pyiceberg-ingestor:latest
+    profiles:
+      - bronze-ingestor
 
 # ============================================================================
 # dbt
@@ -401,6 +391,9 @@ services:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -438,6 +431,9 @@ services:
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
       AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
