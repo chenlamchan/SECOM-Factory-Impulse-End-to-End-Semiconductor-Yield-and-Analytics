@@ -84,12 +84,6 @@ def load_yield_data(days: int, lines:list):
         ORDER BY s.process_date DESC, s.shift_order
     """)
 
-    pareto = query_trino("""
-        SELECT sensor_id, abs_correlation, effect_strength, direction
-        FROM gold_failure_pareto
-        ORDER BY rank LIMIT 15
-    """)
-
     # (Dynamic aggregation for a N-day view)
     calendar = query_trino(f"""
         WITH LineMaxDate AS (
@@ -110,14 +104,14 @@ def load_yield_data(days: int, lines:list):
         GROUP BY d.process_date
         ORDER BY d.process_date DESC
     """)
-    return daily, shift, pareto, calendar
+    return daily, shift, calendar
 
 if not lines_filter:
     st.warning("Select at least one production line.")
     st.stop()
 
 with st.spinner("Loading yield data …"):
-    daily, shift_df, pareto, calendar = load_yield_data(window_days, lines_filter)
+    daily, shift_df, calendar = load_yield_data(window_days, lines_filter)
 
 # ---------------------------------------------------------------------------
 # KPI headline row
@@ -230,8 +224,8 @@ if not daily.empty:
 # ---------------------------------------------------------------------------
 # Yield Trend + DPPM dual-axis
 # ---------------------------------------------------------------------------
-tab_trend, tab_line, tab_pareto, tab_calendar, tab_waterfall = st.tabs([
-    "📉 Overall Yield Trend", "🏭 By Line & Shift", "📊 Failure Pareto",
+tab_trend, tab_line, tab_calendar, tab_waterfall = st.tabs([
+    "📉 Overall Yield Trend", "🏭 By Line & Shift",
     "📅 Calendar Heatmap", "🌊 Yield Waterfall",
 ])
 
@@ -410,34 +404,6 @@ with tab_line:
                 c3.metric("Total Wafers Tested", f"{int(line_total_tested):,}")
                 
                 st.divider()
-
-with tab_pareto:
-    if not pareto.empty:
-        st.markdown("#### Top sensors correlated with wafer failure *(Global Factory Data)*")
-        st.caption("Point-biserial |r| — higher = stronger association with fail label")
-        fig = go.Figure(go.Bar(
-            x=pareto["abs_correlation"],
-            y=[f"Sensor {s}" for s in pareto["sensor_id"]],
-            orientation="h",
-            marker_color=[
-                RED if e == "Strong" else AMBER if e == "Moderate" else GRAY
-                for e in pareto["effect_strength"]
-            ],
-            text=[f"|r|={v:.3f}" for v in pareto["abs_correlation"]],
-            textposition="outside",
-        ))
-        fig.update_layout(
-            **PLOTLY_LAYOUT, height=480,
-            xaxis_title="|Correlation|",
-            yaxis=dict(autorange="reversed"),
-            title="Failure Pareto — sensor correlation with Pass/Fail label",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        with st.expander("Full table"):
-            st.dataframe(pareto, use_container_width=True, hide_index=True)
-    else:
-        st.info("Failure pareto not yet computed. Run dbt models first.")
 
 with tab_calendar:
     st.markdown("#### Yield Calendar by Production Line")

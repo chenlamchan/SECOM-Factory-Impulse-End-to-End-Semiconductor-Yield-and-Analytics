@@ -47,7 +47,7 @@ def load_silver_sample():
     try:
         fs = get_s3_filesystem()
         files = sorted(
-            fs.glob("data-lake/warehouse/silver/**/*.parquet"), reverse=True
+            fs.glob("warehouse/silver/**/*.parquet"), reverse=True
         )[:30]
         if not files:
             return None
@@ -96,6 +96,9 @@ with tab_pareto:
             title="Failure Pareto — top 20 sensors",
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Full table"):
+            st.dataframe(pareto_df, use_container_width=True, hide_index=True)
 
         # Direction annotation
         st.markdown("#### Failure direction")
