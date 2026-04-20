@@ -341,6 +341,10 @@ with tab_line:
         if not daily.empty:
             for line in lines_filter:
                 line_df = daily[daily["line_id"] == line]
+
+                if line_df.empty:
+                    continue 
+                    
                 line_max_date = line_df["process_date"].max()
                 line_min_date = line_max_date - pd.Timedelta(days=window_days)
                 line_start_str = line_min_date.strftime('%Y-%m-%d')
