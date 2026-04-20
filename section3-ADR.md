@@ -344,3 +344,34 @@ $$LSL = \mu_{LineA} - (3.99 \times \sigma_{LineA})$$
 * **UI Interpretation:** Capability gauges across all lines now answer the specific question: *"How well is this specific machine meeting the high standard set by our Golden Line?"*
 
 ---
+**ADR-013: Virtual Feature Store for Batch ML Engineering**
+
+**Status:** ACCEPTED
+
+**Context:** The SECOM (Semiconductor Manufacturing) project involves high-dimensional sensor data (590+ features) characterized by high noise, missing values, and the need for complex preprocessing (imputation, scaling). Since the project is strictly **batch processing** (e.g., generating quality reports for batches of wafers), we do not require the sub-millisecond latency provided by in-memory databases. We need a mechanism that:
+1. **Ensures Reproducibility:** Allows "Time Travel" to query data exactly as it existed during a specific production window.
+2. **Handles Schema Evolution:** Manages 500+ sensor columns that may change, disappear, or be renamed over time.
+3. **Optimizes for Training:** Provides a "Point-in-Time" correct view of features to prevent data leakage during model training.
+
+**Decision:** Use **Apache Iceberg** as the table format (Storage) and **dbt (data build tool)** as the transformation engine to create a "Headless" Feature Store.
+
+**Rationale:**
+* **Point-in-Time Correctness:** Iceberg’s native snapshotting allows us to perform "as-of" queries, ensuring that the features used for training perfectly match the historical state of the manufacturing line.
+* **SQL-as-Code:** dbt allows us to define feature engineering logic (e.g., sensor normalization) in version-controlled SQL, treating the feature store as a governed software product.
+* **Schema Flexibility:** Iceberg supports full schema evolution (adding/dropping sensor columns) without requiring a full rewrite of the historical dataset, which is critical for high-dimensional manufacturing data.
+* **Infrastructure Simplicity:** By avoiding a specialized feature store service (like Feast) or an online database (like Redis), we reduce the system's memory footprint and operational overhead.
+
+**Alternatives Considered:**
+
+| Option | Rejected Reason |
+| :--- | :--- |
+| **Feast + Redis** | Overkill for batch processing. Adds significant overhead (registry management + RAM costs) to solve a "latency" problem that doesn't exist in this use case. |
+| **Standalone Redis** | Lacks persistence for historical data and "Time Travel" capabilities. Redis is a serving layer, not a data management layer for 500+ features. |
+| **Direct CSV/Parquet** | Lacks ACID transactions and governance. Managing schema changes across 590 columns manually in raw files is brittle and prone to "Data Swamp" issues. |
+| **Featureform** | While it supports Iceberg, adding another orchestration layer is unnecessary for a personal project where dbt + Iceberg already provides a clean "Virtual" feature store. |
+
+**Consequences:**
+* **Batch-Only Performance:** Querying features will take seconds rather than milliseconds. This is acceptable for the SECOM batch reports but would require an additional "Online" sink (like Redis) if the project pivots to real-time monitoring.
+* **Storage Efficiency:** Features are stored as compressed Parquet files within the Iceberg format, drastically reducing disk space compared to an in-memory or row-based SQL database.
+* **Simplified Pipeline:** The "Feature Store" is simply a collection of dbt models. There is no separate API to maintain; the "Feature Registry" is effectively the dbt documentation and schema.yml files.
+* **ML Integration:** Model training scripts can point directly to Iceberg tables via DuckDB or PyIceberg, providing a high-performance path for large-scale feature extraction.
