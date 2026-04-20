@@ -34,12 +34,13 @@ services:
         condition: service_healthy
     volumes:
       - prometheus_secrets:/secrets
-      - ./infrastructures/minio/init-minio.sh:/init-minio.sh
+      - ./infrastructures/minio/minio-init.sh:/minio-init.sh
+      - ./infrastructures/minio/minio-init-ml.sh:/minio-init-ml.sh
     entrypoint: /bin/bash
     secrets:
       - minio_user
       - minio_password
-    command: /init-minio.sh
+    command: -c "bash /minio-init.sh && bash /minio-init-ml.sh"
 
   # ==========================================================================
   # OpenTelemetry Collector (The Heart of Modern Observability)
@@ -155,13 +156,15 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./infrastructures/postgres/postgres-init.sh:/init-postgres.sh
+      - ./infrastructures/postgres/postgres-init.sh:/postgres-init.sh
+      - ./infrastructures/postgres/postgres-init-ml.sh:/postgres-init-ml.sh
     secrets:
       - postgres_user
       - postgres_password
       - airflow_db_password
+      - mlflow_db_password
     env_file: .env
-    entrypoint: ['/bin/sh','/init-postgres.sh']
+    entrypoint: ['/bin/sh', '-c', 'sh /postgres-init.sh && sh /postgres-init-ml.sh']
 
   # ==========================================================================
   # Nats (As message broker - like AWS SQS)
@@ -450,6 +453,38 @@ services:
     restart: on-failure
 
 # ============================================================================
+# MLflow (Experiment Tracking, Model Registry, ML Metadata Store)
+# ============================================================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: mlflow
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sh /mlflow-init.sh"]
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    env_file: .env
+    secrets:
+      - mlflow_db_password
+      - minio_user
+      - minio_password
+    volumes:
+      - ./infrastructures/mlflow/mlflow-init.sh:/mlflow-init.sh:ro
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+      - minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+
+# ============================================================================
 # Persistent Volumes
 # ============================================================================
 volumes:
@@ -484,3 +519,6 @@ secrets:
     file: ./secrets/airflow_admin_password.txt
   airflow_db_password:
     file: ./secrets/airflow_db_password.txt
+
+  mlflow_db_password:
+    file: ./secrets/mlflow_db_password.txt

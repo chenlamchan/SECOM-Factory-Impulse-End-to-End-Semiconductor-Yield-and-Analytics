@@ -13,7 +13,7 @@ WAREHOUSE_NAME=${MINIO_WAREHOUSE:-warehouse}
 # FIX: Use single $ for variables
 mc alias set secom-minio http://minio:9000 ${MINIO_USER} ${MINIO_PASS}
 
-echo 'Creating MinIO buckets...'
+echo 'Creating End-to-end Data Analytics MinIO buckets...'
 # Use --ignore-existing to avoid "Bucket already exists" errors cleanly
 mc mb --ignore-existing secom-minio/${BUCKET_NAME}
 mc mb --ignore-existing secom-minio/${WAREHOUSE_NAME}
