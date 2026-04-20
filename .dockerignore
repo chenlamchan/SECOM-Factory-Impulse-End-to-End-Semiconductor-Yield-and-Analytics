@@ -4,4 +4,6 @@
 # Keep only what you need
 !pyproject.toml
 !poetry.lock
+!.streamlit
+!uv.lock
 !src

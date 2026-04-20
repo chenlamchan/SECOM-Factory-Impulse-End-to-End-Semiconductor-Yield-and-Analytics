@@ -288,19 +288,17 @@ services:
     build:
       context: ./services/raw_to_bronze_ingestor
       dockerfile: Dockerfile
-    container_name: bronze-ingestor
     image: pyiceberg-ingestor:latest
     profiles:
       - bronze-ingestor
 
 # ============================================================================
-# dbt
+# dbt (Builds the image for Airflow DockerOperator)
 # ============================================================================
   dbt:
     build:
       context: ./services/dbt
       dockerfile: Dockerfile
-    container_name: dbt
     image: end-to-end-semiconductor-yield-and-analytics-dbt:latest
     volumes:
       - ./dbt_analytics:/dbt
@@ -483,6 +481,46 @@ services:
       retries: 5
       start_period: 40s
 
+# ============================================================================
+# FastAPI (Model Inference/Prediction Service)
+# ============================================================================
+  ml-serving:
+    build:
+      context: ./services/ml/serving
+      dockerfile: Dockerfile
+    image: secom-ml-serving:latest
+    container_name: ml-serving
+    restart: unless-stopped
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MODEL_NAME: secom_yield_predictor
+      MODEL_STAGE: Production
+    secrets:
+      - minio_user
+      - minio_password
+    ports:
+      - "8001:8001"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+# ============================================================================
+# ML Trainer (Builds the image for Airflow DockerOperator)
+# ============================================================================
+  ml-trainer-builder:
+    build:
+      context: ./services/ml/training
+      dockerfile: Dockerfile
+    image: secom-ml-trainer:latest
+    profiles: 
+      - ml-trainer-builder
 
 # ============================================================================
 # Persistent Volumes
