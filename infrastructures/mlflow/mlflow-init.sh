@@ -12,10 +12,6 @@ MINIO_SEC=$(cat /run/secrets/minio_password | tr -d '\n\r ')
 export AWS_ACCESS_KEY_ID="$MINIO_KEY"
 export AWS_SECRET_ACCESS_KEY="$MINIO_SEC"
 
-# Install required Python packages
-echo "Installing dependencies..."
-pip install psycopg2-binary boto3 --quiet
-
 # Start MLflow server
 # Using 'exec' ensures mlflow replaces the shell script as PID 1 for proper signal handling (graceful stops)
 echo "Starting MLflow server..."

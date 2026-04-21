@@ -111,7 +111,6 @@ def main():
     silver_table = "secom_catalog.silver.silver_secom_reporting"
     silver_df = spark.table(silver_table)
 
-    ## Debug
     max_ts_row = silver_df.select(spark_max("process_timestamp").alias("max_ts")).collect()[0]
     max_ts = max_ts_row["max_ts"]
 

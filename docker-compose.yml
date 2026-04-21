@@ -455,7 +455,9 @@ services:
 # MLflow (Experiment Tracking, Model Registry, ML Metadata Store)
 # ============================================================================
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.13.0
+    build:
+      context: ./services/mlflow
+      dockerfile: Dockerfile
     container_name: mlflow
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]

@@ -77,7 +77,7 @@ with DAG(
         application='/opt/airflow/spark_jobs/extract_features.py',
         name='secom_extract_features',
         application_args=[
-            "--lookback-days", "90",
+            "--lookback-days", "730",
             "--min-rows", "500",
             "--missing-threshold", "0.40"
         ],
@@ -94,4 +94,25 @@ with DAG(
         },
     )
 
-    extract_features
+    prepare_features = SparkSubmitOperator(
+        task_id='prepare_features',
+        conn_id='spark_default', 
+        application='/opt/airflow/spark_jobs/prepare_features.py',
+        name='secom_prepare_features',
+        application_args=[
+            "--test-ratio", "0.20"
+        ],
+        conf={
+            "spark.executor.memory": "2g",
+            "spark.executor.cores": "2",
+            "spark.cores.max": "2",
+            "spark.executor.memoryOverhead": "512m",
+            "spark.jars.packages": (
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,"
+                "org.apache.hadoop:hadoop-aws:3.3.4,"
+                "org.postgresql:postgresql:42.6.0"
+            ),
+        },
+    )
+
+    extract_features >> prepare_features
