@@ -7,12 +7,14 @@ a point-in-time feature snapshot to secom_catalog.ml.feature_snapshot.
 Design decisions:
   - Reads directly from Iceberg using the Spark Iceberg catalog.
   - Applies a lookback window so training only sees recent data.
-  - DYNAMIC FEATURE SELECTION: Calculates stats in a single pass to drop 
+  - DYNAMIC FEATURE SELECTION: Calculates stats in a single pass to identify 
     columns with >40% missing data or 0.0 variance.
+  - Keeps all features in the snapshot but writes selected features to manifest.
   - Remaps label_numeric (-1/1) → binary_label (0/1).
   - Writes to a dedicated ml namespace.
 """
 
+import json
 import sys
 import argparse
 import logging
@@ -30,6 +32,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 config = ServiceConfig()
+
+EXTRACT_PIPELINE_VERSION = "1.0.0"
 
 # Constants
 MINIO_ENDPOINT = config.minio_endpoint
@@ -50,8 +54,14 @@ META_COLS = [
 
 # Excluded silver_created_at and processing_logic
 SELECTED_META_COLS = [
-    "observation_id", "process_timestamp", "line_id", "tester_id",
-    "shift", "lot_id", "wafer_status", "label_numeric", "missing_sensor_count", 
+    # Core & Targets
+    "observation_id", "process_timestamp", "label_numeric", "missing_sensor_count",
+    # Factory Context (For Error Analysis)
+    "line_id", "tester_id", "shift", "lot_id", "wafer_status",
+    # Lineage (For Debugging)
+    "bronze_pipeline_version", "source_file",
+    # Experimentation (For strict Train/Test isolation)
+    "is_synthetic", "applied_drift_features"
 ]
 
 def create_spark_session(
@@ -113,6 +123,7 @@ def main():
 
     max_ts_row = silver_df.select(spark_max("process_timestamp").alias("max_ts")).collect()[0]
     max_ts = max_ts_row["max_ts"]
+    max_ts_str = max_ts.strftime("%Y-%m-%d %H:%M:%S")
 
     if not max_ts:
         logger.error("The silver table is empty. Please run the ingestor first.")
@@ -121,8 +132,8 @@ def main():
     
     cutoff = max_ts - timedelta(days=args.lookback_days)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-
-    logger.info("Max timestamp in data: %s", max_ts.strftime("%Y-%m-%d %H:%M:%S"))
+    
+    logger.info("Max timestamp in data: %s", max_ts_str)
     logger.info("Reading with lookback=%d days (cutoff: %s)", args.lookback_days, cutoff_str)
 
     # Apply lookback filter
@@ -166,9 +177,8 @@ def main():
     stats_row = filtered_df.select(*agg_exprs).collect()[0]
 
     # Evaluate the results against our thresholds
-    selected_sensors = []
-    dropped_missing = []
-    dropped_variance = []
+    feature_status = {}
+    active_count = 0
 
     for c in candidate_cols:
         missing_count = stats_row[f"{c}_missing"] or 0
@@ -176,19 +186,18 @@ def main():
         var_val = stats_row[f"{c}_var"]
 
         if missing_rate > args.missing_threshold:
-            dropped_missing.append(c)
+            feature_status[c] = "dropped_40%_missing"
         elif var_val is None or var_val == 0.0:
-            dropped_variance.append(c)
+            feature_status[c] = "dropped_0_variance"
         else:
-            selected_sensors.append(c)
+            feature_status[c] = "active"
+            active_count += 1
 
-    logger.info("Dropped %d columns exceeding %.1f%% missing rate.", len(dropped_missing), args.missing_threshold * 100)
-    logger.info("Dropped %d columns with 0.0 variance.", len(dropped_variance))
-    logger.info("Retained %d valid sensor columns.", len(selected_sensors))
+    logger.info("Evaluated feature statuses. Total Active: %d", active_count)
 
     # ── Select and transform columns
     # Backtick-quote numeric column names for PySpark compatibility
-    sensor_select = [col(f"`{s}`").alias(s) for s in selected_sensors]
+    sensor_select = [col(f"`{s}`").alias(s) for s in candidate_cols]
     meta_select = [col(c) for c in SELECTED_META_COLS if c in all_cols]
 
     feature_df = (
@@ -207,7 +216,7 @@ def main():
         )
         .withColumn("snapshot_timestamp", current_timestamp())
         .withColumn("snapshot_lookback_days", lit(args.lookback_days))
-        # Sort chronologically — required for the time-based split downstream
+        .withColumn("feature_extraction_version", lit(EXTRACT_PIPELINE_VERSION))
         .orderBy("process_timestamp")
     )
 
@@ -229,6 +238,20 @@ def main():
     else:
         writer.create()
         logger.info("Created new feature snapshot at %s", output_table)
+
+    manifest = {
+        "extraction_pipeline_version": EXTRACT_PIPELINE_VERSION,
+        "lookback_start_date": cutoff_str,
+        "lookback_end_date": max_ts_str,
+        "lookback_days": args.lookback_days,
+        "feature_status": feature_status,
+        "extracted_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    manifest_path = "/tmp/feature_manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    logger.info("Saved initial feature selection to manifest: %s", manifest_path)
  
     logger.info("Step 1 complete — feature snapshot written.")
     spark.stop()
