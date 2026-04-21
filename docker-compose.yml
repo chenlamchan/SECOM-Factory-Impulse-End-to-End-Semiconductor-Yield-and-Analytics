@@ -275,6 +275,7 @@ services:
       - minio_password
     volumes:
       - spark_worker_data:/opt/spark/data
+      - ./spark/spark_jobs:/opt/spark/src:ro
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://127.0.0.1:8081" ]
       interval: 30s

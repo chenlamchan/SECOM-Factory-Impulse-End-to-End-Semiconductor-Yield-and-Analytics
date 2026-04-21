@@ -16,7 +16,7 @@ Design decisions:
 import sys
 import argparse
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -43,7 +43,9 @@ S3_WAREHOUSE_PATH = config.minio_warehouse
 META_COLS = [
     "observation_id", "process_timestamp", "line_id", "tester_id",
     "shift", "lot_id", "wafer_status", "label_numeric", "missing_sensor_count", 
-    "silver_created_at", "processing_logic"
+    "silver_created_at", "processing_logic", "is_synthetic", "generation_timestamp",
+    "applied_drift_features", "year", "month", "day", "source_file", "bronze_ingested_at",
+    "bronze_pipeline_version", "silver_created_at", "processing_logic"
 ]
 
 # Excluded silver_created_at and processing_logic
@@ -78,6 +80,7 @@ def create_spark_session(
         .config("spark.hadoop.fs.s3a.secret.key", minio_secret_key) \
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .config("spark.hadoop.fs.s3a.aws.client.region", "us-east-1") \
         .getOrCreate()
 
@@ -108,6 +111,7 @@ def main():
     silver_table = "secom_catalog.silver.silver_secom_reporting"
     silver_df = spark.table(silver_table)
 
+    ## Debug
     max_ts_row = silver_df.select(spark_max("process_timestamp").alias("max_ts")).collect()[0]
     max_ts = max_ts_row["max_ts"]
 
