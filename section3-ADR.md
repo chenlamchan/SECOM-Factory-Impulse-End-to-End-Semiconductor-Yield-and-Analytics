@@ -375,3 +375,41 @@ $$LSL = \mu_{LineA} - (3.99 \times \sigma_{LineA})$$
 * **Storage Efficiency:** Features are stored as compressed Parquet files within the Iceberg format, drastically reducing disk space compared to an in-memory or row-based SQL database.
 * **Simplified Pipeline:** The "Feature Store" is simply a collection of dbt models. There is no separate API to maintain; the "Feature Registry" is effectively the dbt documentation and schema.yml files.
 * **ML Integration:** Model training scripts can point directly to Iceberg tables via DuckDB or PyIceberg, providing a high-performance path for large-scale feature extraction.
+
+---
+This is a great approach. By shifting from a **Hard Delete** (dropping columns physically) to a **Soft Delete** (keeping all data but filtering via metadata), you've essentially created a "Versioned Feature Contract."
+
+Here is the ADR following your template, documenting the transition to a manifest-driven, resilient feature engineering strategy.
+
+---
+
+## ADR-014: Manifest-Driven "Soft" Feature Selection and Imputation
+
+**Status:** ACCEPTED
+
+**Context:** In the SECOM manufacturing environment, sensor reliability is variable. A sensor that fails the "Missingness Threshold" (>40% nulls) today might be repaired and provide high-quality data tomorrow. Hard-dropping columns during the extraction phase (`extract_features.py`) creates a brittle pipeline where the schema of historical snapshots changes unpredictably, making model retraining and "Time Travel" difficult. Furthermore, the prediction service needs a deterministic way to handle missing values at inference time to prevent runtime errors and training-serving skew.
+
+**Decision:** We will implement a **"Soft Feature Selection"** strategy. The PySpark extraction job will persist all 590+ sensors in the Iceberg snapshot, while a companion `feature_manifest.json` will act as the source of truth for which features are "active." Additionally, the training pipeline will calculate and store baseline medians for every active feature within this manifest.
+
+**Rationale:**
+* **Pipeline Robustness:** By keeping all features in the Iceberg snapshot, we avoid data loss. If selection logic changes (e.g., we lower the variance threshold), we can update the manifest without re-running the heavy extraction job.
+* **Training-Inference Alignment:** Using a manifest file ensures that the prediction service uses the exact same feature list and imputation values (medians) that the model was trained on. This is a critical industry practice to prevent "stale" model behavior.
+* **Resilience via Fallbacks:** Persisting medians provides a "safety net." If a sensor breaks in production, the prediction service can use the training-time median as a temporary placeholder, allowing the system to remain operational (graceful degradation) rather than failing.
+* **Explainability (CFE) Baseline:** The medians stored in the manifest provide a "normal" baseline required for generating Counterfactual Explanations, helping engineers understand why a specific wafer was flagged as a failure compared to the "typical" state.
+
+**Implementation Details:**
+1.  **Extraction:** `extract_features.py` identifies "selected_features" but writes the full wide-table to Iceberg.
+2.  **Profiling:** `prepare_features.py` calculates the 50th percentile (`percentile_approx`) exclusively from the **training split** to avoid data leakage.
+3.  **Contract:** The `feature_manifest.json` is passed as a build artifact to the model training and prediction service tasks.
+
+**Alternatives Considered:**
+* **Hard-Dropping Columns:** Rejected because it requires expensive data rewrites if feature selection criteria are tuned.
+* **Real-time Imputation:** Rejected because calculating medians on-the-fly in a prediction service adds unnecessary latency and requires access to historical data windows at runtime.
+* **Constant Value Imputation (e.g., 0):** Rejected because it can introduce significant bias in manufacturing sensor data where "0" might be a valid, extreme measurement.
+
+**Consequences:**
+* **Manifest Dependency:** The `feature_manifest.json` becomes a critical path artifact. If it is lost or corrupted, the inference service cannot map input data to model features.
+* **Storage Overhead:** Keeping "dropped" features in the Iceberg table increases storage footprint slightly, though Iceberg/Parquet compression mitigates this for columns with high null counts.
+* **Traceability:** Every model version is now explicitly tied to a manifest version, providing an audit trail of exactly what sensors and imputation values were used for any historical prediction.
+
+---
