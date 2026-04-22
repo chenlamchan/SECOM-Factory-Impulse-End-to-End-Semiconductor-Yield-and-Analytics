@@ -36,6 +36,7 @@ services:
       - prometheus_secrets:/secrets
       - ./infrastructures/minio/minio-init.sh:/minio-init.sh
       - ./infrastructures/minio/minio-init-ml.sh:/minio-init-ml.sh
+      - ./data/raw/uci-secom.csv:/uci-secom.csv
     entrypoint: /bin/bash
     secrets:
       - minio_user
@@ -505,6 +506,8 @@ services:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       MODEL_NAME: secom_yield_predictor
       MODEL_STAGE: Production
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
     secrets:
       - minio_user
       - minio_password

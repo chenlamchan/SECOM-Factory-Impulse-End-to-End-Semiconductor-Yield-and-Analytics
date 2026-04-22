@@ -186,7 +186,6 @@ with DAG(
         command=(
             f"python /spark_jobs/validate_model.py "
             f"--manifest-path {MANIFEST_S3_URI} "
-            f"--run-id {{{{ task_instance.xcom_pull(task_ids='train_model') }}}}"
         ),
         docker_url="unix://var/run/docker.sock",
         environment=COMMON_ENV,
@@ -204,7 +203,7 @@ with DAG(
     # If gate passes, trigger an API reload
     reload_serving_api = BashOperator(
         task_id="reload_serving_api",
-        bash_command="curl -X POST http://serving-api:8000/reload"
+        bash_command="curl -X POST http://ml-serving:8001/reload"
     )
 
     extract_features >> prepare_features >> train_model >> evaluate_model >> validate_model >> promotion_gate >> reload_serving_api

@@ -49,6 +49,11 @@ MINIO_ENDPOINT = config.minio_endpoint
 MINIO_ACCESS_KEY = config.minio_access_key
 MINIO_SECRET_KEY = config.minio_secret_key
 
+os.environ["MLFLOW_S3_ENDPOINT_URL"] = MINIO_ENDPOINT
+os.environ["AWS_ACCESS_KEY_ID"] = MINIO_ACCESS_KEY
+os.environ["AWS_SECRET_ACCESS_KEY"] = MINIO_SECRET_KEY
+os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+
 TARGET_COL = "binary_label"
 META_FEATURES = ["missing_sensor_rate"]
 
@@ -73,6 +78,7 @@ def _load_model(run_id: str):
 
     if model_type == "lightgbm":
         return mlflow.lightgbm.load_model(model_uri), model_type
+
     return mlflow.xgboost.load_model(model_uri), model_type
 
 
@@ -164,6 +170,9 @@ def main():
         active_sensors = manifest.get("active_features_list", [])
         cat_features   = manifest.get("categorical_features", [])
         lag_features   = manifest.get("lag_features", [])
+
+        cat_modes      = manifest.get("categorical_modes", {})
+
         ALL_FEATURES   = active_sensors + cat_features + lag_features + META_FEATURES
         logger.info("Loaded manifest: Expecting %d features for evaluation.", len(ALL_FEATURES))
     except FileNotFoundError:
@@ -204,6 +213,12 @@ def main():
     if "observation_id" not in test_df.columns:
         test_df["observation_id"] = [f"eval_{i}" for i in range(len(test_df))]
 
+    for c in cat_features:
+        if c not in test_df.columns:
+            fallback_val = cat_modes.get(c, "UNKNOWN")
+            logger.warning("Categorical feature '%s' missing from held-out data. Injecting fallback mode: '%s'", c, fallback_val)
+            test_df[c] = fallback_val
+
     # 4. Extract aligned X and y
     feature_cols = [c for c in ALL_FEATURES if c in test_df.columns]
     X_test = test_df[feature_cols].copy()
@@ -242,7 +257,7 @@ def main():
 
     logger.info(
         "Evaluation — AUC=%.5f F1=%.5f Precision=%.5f Recall=%.5f",
-        auc, report["Fail"]["f1"], report["Fail"]["precision"], report["Fail"]["recall"]
+        auc, report["Fail"]["f1-score"], report["Fail"]["precision"], report["Fail"]["recall"]
     )
 
     # ── SHAP ─────────────────────────────────────────────────────────────────
@@ -255,20 +270,11 @@ def main():
             X_sample[c] = X_sample[c].astype("category")
     X_sample[numeric_cols] = X_sample[numeric_cols].astype(np.float32)
 
-    logger.info("Running SHAP TreeExplainer on %d samples...", len(X_sample))
-    explainer   = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_sample)
-
-    if isinstance(shap_values, list):
-        shap_values = shap_values[1]   # positive class (Fail)
-
-    shap_df = pd.DataFrame(shap_values, columns=feature_cols)
-    shap_df["observation_id"] = sample_df["observation_id"].values
 
     # ── Log everything to MLflow (resuming the winning run) ───────────────────
-    with mlflow.start_run(run_id=args.run_id):
+    with mlflow.start_run(run_id=winning_run_id):
         mlflow.log_metric("held_out_auc",       auc)
-        mlflow.log_metric("held_out_f1_fail",   report["Fail"]["f1"])
+        mlflow.log_metric("held_out_f1_fail",   report["Fail"]["f1-score"])
         mlflow.log_metric("held_out_prec_fail", report["Fail"]["precision"])
         mlflow.log_metric("held_out_rec_fail",  report["Fail"]["recall"])
         mlflow.log_metric("tn", int(cm[0, 0]))
@@ -285,14 +291,6 @@ def main():
             _plot_pr_curve(y_test, y_prob, pr_path)
             mlflow.log_artifact(pr_path, "evaluation")
 
-            shap_plot_path = f"{tmp}/shap_summary.png"
-            _plot_shap_summary(shap_values, X_sample, feature_cols, shap_plot_path)
-            mlflow.log_artifact(shap_plot_path, "shap")
-
-            shap_parquet_path = f"{tmp}/shap_values.parquet"
-            shap_df.to_parquet(shap_parquet_path, index=False)
-            mlflow.log_artifact(shap_parquet_path, "shap")
-
             thresh_path = f"{tmp}/threshold_analysis.json"
             with open(thresh_path, "w") as f:
                 json.dump(thresh_analysis, f, indent=2)
@@ -303,7 +301,7 @@ def main():
                 json.dump(report, f, indent=2)
             mlflow.log_artifact(report_path, "evaluation")
 
-    logger.info("Step 5 complete — evaluation artifacts logged to run %s", args.run_id)
+    logger.info("Step 5 complete — evaluation artifacts logged to run %s", winning_run_id)
 
 
 if __name__ == "__main__":

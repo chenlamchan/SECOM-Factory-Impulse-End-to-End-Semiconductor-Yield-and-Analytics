@@ -40,4 +40,8 @@ mc mb --ignore-existing "secom-minio/${ML_METADATA_BUCKET}"
 mc anonymous set private "secom-minio/${ML_METADATA_BUCKET}"
 echo "✓ Created bucket: ${ML_METADATA_BUCKET}"
 
+echo "Uploading holdset test data..."
+mc cp uci-secom.csv "secom-minio/${ML_METADATA_BUCKET}/holdset-test-data/"
+echo "✓ Uploaded CSV to ${ML_METADATA_BUCKET}/holdout-test-data/"
+
 echo "MinIO ML setup complete."

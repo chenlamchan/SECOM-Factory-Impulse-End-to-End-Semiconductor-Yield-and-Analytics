@@ -46,6 +46,11 @@ MINIO_ENDPOINT = config.minio_endpoint
 MINIO_ACCESS_KEY = config.minio_access_key
 MINIO_SECRET_KEY = config.minio_secret_key
 
+os.environ["MLFLOW_S3_ENDPOINT_URL"] = MINIO_ENDPOINT
+os.environ["AWS_ACCESS_KEY_ID"] = MINIO_ACCESS_KEY
+os.environ["AWS_SECRET_ACCESS_KEY"] = MINIO_SECRET_KEY
+os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+
 META_FEATURES = ["missing_sensor_rate"]
 
 
@@ -61,21 +66,18 @@ def get_s3_filesys():
 def _get_production_metrics(client: MlflowClient, model_name: str) -> dict | None:
     """Return metrics of the current Production model, or None if no Production version."""
     try:
-        versions = client.get_latest_versions(model_name, stages=["Production"])
-        if not versions:
-            return None
-        prod_run_id = versions[0].run_id
+        mv = client.get_model_version_by_alias(model_name, "champion")
+        prod_run_id = mv.run_id
         run = client.get_run(prod_run_id)
         return {
-            "version": versions[0].version,
+            "version": mv.version,
             "run_id":  prod_run_id,
             "auc":     float(run.data.metrics.get("held_out_auc", 0.0)),
             "f1":      float(run.data.metrics.get("held_out_f1_fail", 0.0)),
         }
     except MlflowException as e:
-        logger.warning("Could not fetch Production metrics: %s", e)
+        logger.warning("Could not fetch 'champion' metrics (this is normal for the first run): %s", e)
         return None
-
 
 def _smoke_test(model_uri: str, model_type: str, feature_names: list, cat_features: list, cat_modes: dict) -> bool:
     """
@@ -118,7 +120,6 @@ def _smoke_test(model_uri: str, model_type: str, feature_names: list, cat_featur
 
 def main():
     parser = argparse.ArgumentParser(description="SECOM ML — Champion Gate")
-    parser.add_argument("--run-id",        required=True)
     parser.add_argument("--auc-min-delta", type=float, default=-0.005,
                         help="Min AUC improvement vs production (negative = allow regression).")
     parser.add_argument("--f1-min-delta",  type=float, default=-0.010)
@@ -132,6 +133,16 @@ def main():
 
     # ── Load Manifest for Smoke Test ──────────────────────────────────────────
     s3 = get_s3_filesys()
+
+    winner_path = args.manifest_path.replace("feature_manifest.json", "winner_run_id.txt")
+    try:
+        with s3.open(winner_path, "r") as f:
+            winning_run_id = f.read().strip()
+        logger.info("Retrieved winning run ID from MinIO: %s", winning_run_id)
+    except FileNotFoundError:
+        logger.error("Winner run_id file not found. Evaluation aborted.")
+        sys.exit(1)
+
     try:
         with s3.open(args.manifest_path, "r") as f:
             manifest = json.load(f)
@@ -146,7 +157,7 @@ def main():
         sys.exit(1)
 
     # ── Fetch candidate metrics ───────────────────────────────────────────────
-    candidate_run = client.get_run(args.run_id)
+    candidate_run = client.get_run(winning_run_id)
 
     cand_auc = float(candidate_run.data.metrics.get("held_out_auc", 0.0))
     cand_f1  = float(candidate_run.data.metrics.get("held_out_f1_fail", 0.0))
@@ -154,7 +165,7 @@ def main():
 
     logger.info(
         "Candidate — run_id=%s type=%s AUC=%.5f F1=%.5f",
-        args.run_id, cand_type, cand_auc, cand_f1
+        winning_run_id, cand_type, cand_auc, cand_f1
     )
 
     # ── Fetch production metrics ──────────────────────────────────────────────
@@ -204,10 +215,10 @@ def main():
         sys.exit(0)
 
     # ── Register and promote ───────────────────────────────────────────────────
-    logger.info("Registering model '%s' from run %s...", model_name, args.run_id)
+    logger.info("Registering model '%s' from run %s...", model_name, winning_run_id)
 
     mv = mlflow.register_model(
-        model_uri=f"runs:/{args.run_id}/model",
+        model_uri=f"runs:/{winning_run_id}/model",
         name=model_name,
     )
     for _ in range(30):
@@ -217,38 +228,24 @@ def main():
         time.sleep(2)
 
     # Transition to Staging and smoke-test
-    client.transition_model_version_stage(
-        name=model_name, version=mv.version, stage="Staging"
-    )
-    logger.info("Transitioned v%s to Staging — running smoke test...", mv.version)
-
-    staging_uri = f"models:/{model_name}/Staging"
-    
-    smoke_ok    = _smoke_test(staging_uri, cand_type, ALL_FEATURES, cat_features, cat_modes)
+    logger.info("Running smoke test on v%s...", mv.version)
+    test_uri = f"models:/{model_name}/{mv.version}"
+    smoke_ok = _smoke_test(test_uri, cand_type, ALL_FEATURES, cat_features, cat_modes)
 
     if not smoke_ok:
         result["reason"] = f"Smoke test FAILED for v{mv.version} — not promoting."
-        client.transition_model_version_stage(
-            name=model_name, version=mv.version, stage="Archived"
-        )
         print(json.dumps(result))
         sys.exit(0)
 
-    if prod_metrics:
-        client.transition_model_version_stage(
-            name=model_name, version=prod_metrics["version"], stage="Archived"
-        )
-        logger.info("Archived previous Production v%s", prod_metrics["version"])
-
-    client.transition_model_version_stage(
-        name=model_name, version=mv.version, stage="Production"
+    client.set_registered_model_alias(
+        name=model_name, alias="champion", version=mv.version
     )
-    logger.info("Promoted v%s to Production.", mv.version)
+    logger.info("Assigned 'champion' alias to v%s.", mv.version)
 
     # Tag the winning run
-    client.set_tag(args.run_id, "promoted_to_production", "true")
-    client.set_tag(args.run_id, "model_version", mv.version)
-    client.set_tag(args.run_id, "validate_version", VALIDATE_PIPELINE_VERSION)
+    client.set_tag(winning_run_id, "promoted_to_production", "true")
+    client.set_tag(winning_run_id, "model_version", mv.version)
+    client.set_tag(winning_run_id, "validate_version", VALIDATE_PIPELINE_VERSION)
 
     result["promoted"] = True
     result["version"]  = mv.version
