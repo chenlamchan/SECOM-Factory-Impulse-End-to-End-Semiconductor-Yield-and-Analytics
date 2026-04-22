@@ -34,12 +34,13 @@ services:
         condition: service_healthy
     volumes:
       - prometheus_secrets:/secrets
-      - ./infrastructures/minio/init-minio.sh:/init-minio.sh
+      - ./infrastructures/minio/minio-init.sh:/minio-init.sh
+      - ./infrastructures/minio/minio-init-ml.sh:/minio-init-ml.sh
     entrypoint: /bin/bash
     secrets:
       - minio_user
       - minio_password
-    command: /init-minio.sh
+    command: -c "bash /minio-init.sh && bash /minio-init-ml.sh"
 
   # ==========================================================================
   # OpenTelemetry Collector (The Heart of Modern Observability)
@@ -145,8 +146,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -h localhost -U $(cat /run/secrets/postgres_user) -d postgres"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 30s
+      retries: 15
+      start_period: 60s
 
   postgres-init:
     image: postgres:15-alpine
@@ -155,13 +156,15 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./infrastructures/postgres/postgres-init.sh:/init-postgres.sh
+      - ./infrastructures/postgres/postgres-init.sh:/postgres-init.sh
+      - ./infrastructures/postgres/postgres-init-ml.sh:/postgres-init-ml.sh
     secrets:
       - postgres_user
       - postgres_password
       - airflow_db_password
+      - mlflow_db_password
     env_file: .env
-    entrypoint: ['/bin/sh','/init-postgres.sh']
+    entrypoint: ['/bin/sh', '-c', 'sh /postgres-init.sh && sh /postgres-init-ml.sh']
 
   # ==========================================================================
   # Nats (As message broker - like AWS SQS)
@@ -272,6 +275,7 @@ services:
       - minio_password
     volumes:
       - spark_worker_data:/opt/spark/data
+      - ./spark/spark_jobs:/opt/spark/src:ro
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://127.0.0.1:8081" ]
       interval: 30s
@@ -285,19 +289,17 @@ services:
     build:
       context: ./services/raw_to_bronze_ingestor
       dockerfile: Dockerfile
-    container_name: bronze-ingestor
     image: pyiceberg-ingestor:latest
     profiles:
       - bronze-ingestor
 
 # ============================================================================
-# dbt
+# dbt (Builds the image for Airflow DockerOperator)
 # ============================================================================
   dbt:
     build:
       context: ./services/dbt
       dockerfile: Dockerfile
-    container_name: dbt
     image: end-to-end-semiconductor-yield-and-analytics-dbt:latest
     volumes:
       - ./dbt_analytics:/dbt
@@ -450,6 +452,82 @@ services:
     restart: on-failure
 
 # ============================================================================
+# MLflow (Experiment Tracking, Model Registry, ML Metadata Store)
+# ============================================================================
+  mlflow:
+    build:
+      context: ./services/mlflow
+      dockerfile: Dockerfile
+    container_name: mlflow
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sh /mlflow-init.sh"]
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    env_file: .env
+    secrets:
+      - mlflow_db_password
+      - minio_user
+      - minio_password
+    volumes:
+      - ./infrastructures/mlflow/mlflow-init.sh:/mlflow-init.sh:ro
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+# ============================================================================
+# FastAPI (Model Inference/Prediction Service)
+# ============================================================================
+  ml-serving:
+    build:
+      context: ./services/ml/serving
+      dockerfile: Dockerfile
+    image: secom-ml-serving:latest
+    container_name: ml-serving
+    restart: unless-stopped
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MODEL_NAME: secom_yield_predictor
+      MODEL_STAGE: Production
+    secrets:
+      - minio_user
+      - minio_password
+    ports:
+      - "8001:8001"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+# ============================================================================
+# ML Trainer (Builds the image for Airflow DockerOperator)
+# ============================================================================
+  ml-trainer-builder:
+    build:
+      context: ./services/ml/training
+      dockerfile: Dockerfile
+    image: secom-ml-trainer:latest
+    profiles: 
+      - ml-trainer-builder
+
+# ============================================================================
 # Persistent Volumes
 # ============================================================================
 volumes:
@@ -484,3 +562,6 @@ secrets:
     file: ./secrets/airflow_admin_password.txt
   airflow_db_password:
     file: ./secrets/airflow_db_password.txt
+
+  mlflow_db_password:
+    file: ./secrets/mlflow_db_password.txt

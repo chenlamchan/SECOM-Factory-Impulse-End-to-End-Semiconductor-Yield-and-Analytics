@@ -18,8 +18,8 @@ SELECT
 
     -- Dynamic macro to calculate nulls across all 590 features
     (
-        {% for i in range(0, 591) %}
-            CASE WHEN {{ "%03d" | format(i) }} IS NULL THEN 1 ELSE 0 END
+        {% for i in range(0, 590) %}
+            CASE WHEN {{ i }} IS NULL THEN 1 ELSE 0 END
             {% if not loop.last %} + {% endif %}
         {% endfor %}
     ) AS missing_sensor_count,
