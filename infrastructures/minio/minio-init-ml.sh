@@ -13,9 +13,10 @@ echo "Setting up MLflow artifacts bucket in MinIO..."
 MINIO_USER=$(cat /run/secrets/minio_user | tr -d '\n\r ')
 MINIO_PASS=$(cat /run/secrets/minio_password | tr -d '\n\r ')
 
-MLFLOW_BUCKET=${MLFLOW_BUCKET:-mlflow-artifacts}
-EVIDENTLY_BUCKET=${EVIDENTLY_BUCKET:-evidently-reports}
-ML_PREDICTIONS_BUCKET=${ML_PREDICTIONS_BUCKET:-ml-predictions}
+MLFLOW_BUCKET=${MINIO_MLFLOW:-mlflow-artifacts}
+EVIDENTLY_BUCKET=${MINIO_EVIDENTLY:-evidently-reports}
+ML_PREDICTIONS_BUCKET=${MINIO_PREDICTIONS:-ml-predictions}
+ML_METADATA_BUCKET=${MINIO_ML_METADATA:-ml-metadata}
 
 mc alias set secom-minio http://minio:9000 "${MINIO_USER}" "${MINIO_PASS}"
 
@@ -33,5 +34,10 @@ echo "✓ Created bucket: ${EVIDENTLY_BUCKET}"
 mc mb --ignore-existing "secom-minio/${ML_PREDICTIONS_BUCKET}"
 mc anonymous set private "secom-minio/${ML_PREDICTIONS_BUCKET}"
 echo "✓ Created bucket: ${ML_PREDICTIONS_BUCKET}"
+
+# ML Metadata (written by training-dag.py, read within airflow pipelines)
+mc mb --ignore-existing "secom-minio/${ML_METADATA_BUCKET}"
+mc anonymous set private "secom-minio/${ML_METADATA_BUCKET}"
+echo "✓ Created bucket: ${ML_METADATA_BUCKET}"
 
 echo "MinIO ML setup complete."

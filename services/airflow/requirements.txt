@@ -4,3 +4,4 @@ pydantic-settings==2.2.1
 apache-airflow-providers-apache-spark==4.7.0
 apache-airflow-providers-docker==3.9.1
 docker==7.0.0
+s3fs==2023.12.2

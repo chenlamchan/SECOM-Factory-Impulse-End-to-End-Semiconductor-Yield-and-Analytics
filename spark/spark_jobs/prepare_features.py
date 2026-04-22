@@ -22,6 +22,7 @@ Operations (in order):
 """
 
 import sys
+import s3fs
 import argparse
 import logging
 import json
@@ -103,6 +104,14 @@ def create_spark_session(
         .config("spark.hadoop.fs.s3a.aws.client.region", "us-east-1") \
         .getOrCreate()
 
+def get_s3_filesys():
+    return s3fs.S3FileSystem(
+        client_kwargs={'endpoint_url': MINIO_ENDPOINT, 'region_name': 'us-east-1'},
+        key=MINIO_ACCESS_KEY,
+        secret=MINIO_SECRET_KEY
+    )
+
+
 def main():
     from common.config import ServiceConfig
     config = ServiceConfig()
@@ -113,11 +122,14 @@ def main():
     parser.add_argument("--feature-table", default="secom_catalog.ml.feature_snapshot")
     parser.add_argument("--train-table",   default="secom_catalog.ml.train_features")
     parser.add_argument("--test-table",    default="secom_catalog.ml.test_features")
+    parser.add_argument("--manifest-path", default="/tmp/feature_manifest.json", help="Path to read/write the manifest file")
     args = parser.parse_args()
 
-    manifest_path = "/tmp/feature_manifest.json"
+    s3 = get_s3_filesys()
+    manifest_path = args.manifest_path
+
     try:
-        with open(manifest_path, "r") as f:
+        with s3.open(manifest_path, "r") as f:
             manifest = json.load(f)
         feature_status_dict = manifest.get("feature_status", {})
         active_features = [col_name for col_name, status in feature_status_dict.items() if status == "active"]
@@ -247,7 +259,7 @@ def main():
 
     print(json.dumps(manifest, indent=2))
 
-    with open(manifest_path, "w") as f:
+    with s3.open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
     logger.info("Appended train/test details and updated manifest at %s", manifest_path)
 

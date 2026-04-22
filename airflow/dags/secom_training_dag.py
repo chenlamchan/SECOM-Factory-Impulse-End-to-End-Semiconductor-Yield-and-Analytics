@@ -31,23 +31,52 @@ config = ServiceConfig()
 
 # Config
 COMMON_ENV = {
-
+    "MINIO_ENDPOINT": "http://minio:9000",
+    "MINIO_ACCESS_KEY_FILE": "/run/secrets/minio_user",
+    "MINIO_SECRET_KEY_FILE": "/run/secrets/minio_password",
+    "AIRFLOW_DB_PASSWORD_FILE": "/run/secrets/airflow_db_password",
+    "CATALOG_NAME": "data_catalog",
+    "CATALOG_USER": "airflow",
 }
+
 NATS_URL = config.nats_endpoint
 STREAM_NAME = None
 SUBJECT = None
 CONSUMER_NAME = "airflow_ml_trainer_consumer"
 
+MANIFEST_S3_URI = "s3://ml-metadata/manifests/feature_manifest.json"
+HELD_OUT_CSV_S3_URI = "s3://ml-metadata/holdout-test-data/uci-secom.csv"
 DBT_PROJECT_PATH = os.environ.get('DBT_PROJECT_PATH', '/opt/airflow/dbt_analytics')
 MINIO_USER_FILEPATH = os.environ.get('MINIO_USER_FILEPATH')
 MINIO_PWD_FILEPATH = os.environ.get('MINIO_PWD_FILEPATH')
 AIRFLOW_DB_PWD_FILEPATH = os.environ.get('AIRFLOW_DB_PWD_FILEPATH')
+HOST_SPARK_JOBS_PATH = os.environ.get('SPARK_JOB_FILEPATH')
 
-SECRET_MOUNTS = [
+DOCKER_MOUNTS = [
     Mount(source=MINIO_USER_FILEPATH, target="/run/secrets/minio_user", type="bind", read_only=True),
     Mount(source=MINIO_PWD_FILEPATH, target="/run/secrets/minio_password", type="bind", read_only=True),
     Mount(source=AIRFLOW_DB_PWD_FILEPATH, target="/run/secrets/airflow_db_password", type="bind", read_only=True),
+    Mount(source=HOST_SPARK_JOBS_PATH, target="/spark_jobs", type="bind", read_only=True),
 ]
+
+def _check_promotion(**context):
+        """Checks the JSON output from validate_model to see if we should reload serving."""
+        validation_output_str = context['ti'].xcom_pull(task_ids='validate_model')
+        if not validation_output_str:
+            return False
+            
+        try:
+            # Parse the JSON string printed by validate_model
+            result = json.loads(validation_output_str)
+            if result.get("promoted") is True:
+                logger.info(f"Model Promoted! Version: {result.get('version')}. Proceeding to deployment.")
+                return True
+            else:
+                logger.info(f"Model Rejected. Reason: {result.get('reason')}. Halting pipeline.")
+                return False
+        except Exception as e:
+            logger.error(f"Failed to parse validation output: {e}")
+            return False
 
 default_args = {
     "owner": "ml_engineering",
@@ -79,7 +108,8 @@ with DAG(
         application_args=[
             "--lookback-days", "730",
             "--min-rows", "500",
-            "--missing-threshold", "0.40"
+            "--missing-threshold", "0.40",
+            "--manifest-path", MANIFEST_S3_URI
         ],
         conf={
             "spark.executor.memory": "2g",
@@ -100,7 +130,8 @@ with DAG(
         application='/opt/airflow/spark_jobs/prepare_features.py',
         name='secom_prepare_features',
         application_args=[
-            "--test-ratio", "0.20"
+            "--test-ratio", "0.20",
+            "--manifest-path", MANIFEST_S3_URI
         ],
         conf={
             "spark.executor.memory": "2g",
@@ -115,4 +146,65 @@ with DAG(
         },
     )
 
-    extract_features >> prepare_features
+    train_model = DockerOperator(
+        task_id="train_model",
+        image="secom-ml-trainer:latest",
+        api_version="auto",
+        auto_remove=True, # Clean up container after it finishes
+        command=f"python /spark_jobs/train_model.py --manifest-path {MANIFEST_S3_URI}",
+        docker_url="unix://var/run/docker.sock", # Connects to host Docker daemon
+        environment=COMMON_ENV,
+        mounts=DOCKER_MOUNTS,
+        mount_tmp_dir=False,
+        do_xcom_push=False, 
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',
+    )
+
+    evaluate_model = DockerOperator(
+        task_id="evaluate_model",
+        image="secom-ml-trainer:latest",
+        api_version="auto",
+        auto_remove=True,
+        command=(
+            f"python /spark_jobs/evaluate_model.py "
+            f"--manifest-path {MANIFEST_S3_URI} "
+            f"--held-out-data {HELD_OUT_CSV_S3_URI} "
+        ),
+        docker_url="unix://var/run/docker.sock",
+        environment=COMMON_ENV,
+        mounts=DOCKER_MOUNTS,
+        mount_tmp_dir=False,
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',
+    )
+
+    validate_model = DockerOperator(
+        task_id="validate_model",
+        image="secom-ml-trainer:latest",
+        api_version="auto",
+        auto_remove=True,
+        # Pulls run_id from train_model just like evaluate_model did
+        command=(
+            f"python /spark_jobs/validate_model.py "
+            f"--manifest-path {MANIFEST_S3_URI} "
+            f"--run-id {{{{ task_instance.xcom_pull(task_ids='train_model') }}}}"
+        ),
+        docker_url="unix://var/run/docker.sock",
+        environment=COMMON_ENV,
+        mounts=DOCKER_MOUNTS,
+        mount_tmp_dir=False,
+        do_xcom_push=True, # Pushes the {"promoted": true/false} JSON to XCom
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',
+    )
+
+    promotion_gate = ShortCircuitOperator(
+        task_id="promotion_gate",
+        python_callable=_check_promotion,
+    )
+
+    # If gate passes, trigger an API reload
+    reload_serving_api = BashOperator(
+        task_id="reload_serving_api",
+        bash_command="curl -X POST http://serving-api:8000/reload"
+    )
+
+    extract_features >> prepare_features >> train_model >> evaluate_model >> validate_model >> promotion_gate >> reload_serving_api

@@ -25,7 +25,7 @@ class ServiceConfig(BaseSettings):
 
     @property
     def catalog_uri(self):
-        return f"jdbc:postgresql://postgres:5432/{self.catalog_name}"
+        return f"postgresql+psycopg2://{self.catalog_user}:{self.catalog_password}@postgres:5432/{self.catalog_name}"
 
     @property
     def catalog_password(self):

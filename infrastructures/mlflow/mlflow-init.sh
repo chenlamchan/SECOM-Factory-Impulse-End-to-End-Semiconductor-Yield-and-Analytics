@@ -20,4 +20,6 @@ exec mlflow server \
   --default-artifact-root "s3://mlflow-artifacts/" \
   --host 0.0.0.0 \
   --port 5000 \
-  --serve-artifacts
+  --serve-artifacts \
+  --allowed-hosts "*" \
+  --cors-allowed-origins "*"

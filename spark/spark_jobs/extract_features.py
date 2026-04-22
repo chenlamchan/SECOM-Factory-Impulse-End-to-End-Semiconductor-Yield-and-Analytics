@@ -15,6 +15,7 @@ Design decisions:
 """
 
 import json
+import s3fs
 import sys
 import argparse
 import logging
@@ -94,6 +95,13 @@ def create_spark_session(
         .config("spark.hadoop.fs.s3a.aws.client.region", "us-east-1") \
         .getOrCreate()
 
+def get_s3_filesys():
+    return s3fs.S3FileSystem(
+        client_kwargs={'endpoint_url': MINIO_ENDPOINT, 'region_name': 'us-east-1'},
+        key=MINIO_ACCESS_KEY,
+        secret=MINIO_SECRET_KEY
+    )
+
 def main():
     from common.config import ServiceConfig
     config = ServiceConfig()
@@ -104,6 +112,7 @@ def main():
     parser.add_argument("--min-rows", type=int, default=500, help="Abort pipeline if fewer rows available.")
     parser.add_argument("--missing-threshold", type=float, default=0.40, help="Drop columns with missing data > this fraction.")
     parser.add_argument("--output-table", default="secom_catalog.ml.feature_snapshot")
+    parser.add_argument("--manifest-path", default="/tmp/feature_manifest.json", help="Path to read/write the manifest file")
     args = parser.parse_args()
 
     spark = create_spark_session(
@@ -248,9 +257,12 @@ def main():
         "extracted_at": datetime.now(timezone.utc).isoformat()
     }
 
-    manifest_path = "/tmp/feature_manifest.json"
-    with open(manifest_path, "w") as f:
+    s3 = get_s3_filesys()
+    manifest_path = args.manifest_path
+
+    with s3.open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
+
     logger.info("Saved initial feature selection to manifest: %s", manifest_path)
  
     logger.info("Step 1 complete — feature snapshot written.")

@@ -1,7 +1,7 @@
 # ==========================================================================
 # Builder Stage
 # ==========================================================================
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 # 1. Copy the uv binary from the official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+ENV UV_LINK_MODE=copy
+
 # 3. Copy only the files needed for dependency resolution
 COPY pyproject.toml uv.lock ./
 
@@ -23,7 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ==========================================================================
 # Final Stage
 # ==========================================================================
-FROM python:3.12-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 

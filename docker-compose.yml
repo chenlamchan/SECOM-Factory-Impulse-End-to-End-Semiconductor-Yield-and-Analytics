@@ -396,9 +396,11 @@ services:
       MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
+      SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/shared_data:/opt/airflow/shared_data
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
@@ -436,9 +438,11 @@ services:
       MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
+      SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/shared_data:/opt/airflow/shared_data
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
       - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
