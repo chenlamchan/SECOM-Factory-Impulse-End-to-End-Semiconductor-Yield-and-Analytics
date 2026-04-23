@@ -358,30 +358,17 @@ with tab_line:
                 daily_tested=("wafers_tested", "sum")
             ).reset_index()
 
-            daily_line = daily_line.sort_values(["line_id", "process_date"])    
-
             daily_line["ppm_defective"] = (daily_line["daily_failed"] / daily_line["daily_tested"].clip(lower=1)) * 1e6
-            daily_line["ppm_smoothed"] = daily_line.groupby("line_id")["ppm_defective"].transform(lambda x: x.rolling(window=7, min_periods=1).mean())
-            
+
             fig3 = px.line(
-                daily_line,
-                x="process_date", 
-                y="ppm_smoothed", # Use smoothed value for the line
+                daily_line.sort_values("process_date"),
+                x="process_date", y="ppm_defective",
                 color="line_id",
                 color_discrete_map={"LINE_A": TEAL, "LINE_B": BLUE, "LINE_C": AMBER},
-                labels={"ppm_smoothed": "DPPM (7D Avg)", "process_date": "Date"},
+                markers=True,
+                labels={"ppm_defective": "DPPM", "process_date": "Date"},
             )
-
-            fig3.add_trace(go.Scatter(
-                x=daily_line["process_date"], y=daily_line["ppm_defective"],
-                mode='markers', marker=dict(size=4, opacity=0.3),
-                name="Raw DPPM", showlegend=False
-            ))
-
-            fig3.update_layout(**PLOTLY_LAYOUT, height=350, yaxis_title="DPPM")
-            # Prevent lines from connecting across long gaps
-            fig3.update_traces(connectgaps=False) 
-            
+            fig3.update_layout(**PLOTLY_LAYOUT, height=320)
             st.plotly_chart(fig3, use_container_width=True)
     else:
         st.info("No line-level failure data available.")

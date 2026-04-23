@@ -21,24 +21,18 @@ fi
 ADMIN_USER=${AIRFLOW_ADMIN_USER}
 ADMIN_EMAIL=${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
 
-set +e
-
 # Create user ONLY if it doesn't exist
-airflow users create \
-    --role Admin \
-    --username "$ADMIN_USER" \
-    --password "$ADMIN_PASSWORD" \
-    --email "$ADMIN_EMAIL" \
-    --firstname Admin \
-    --lastname User
-
-if [ $? -eq 0 ]; then
-    echo "Admin user created successfully."
+if ! airflow users list | grep -q "$ADMIN_USER"; then
+    airflow users create \
+      --role Admin \
+      --username "$ADMIN_USER" \
+      --password "$ADMIN_PASSWORD" \
+      --email "$ADMIN_EMAIL" \
+      --firstname Admin \
+      --lastname User
 else
-    echo "Admin user already exists or creation bypassed."
+    echo "Admin user already exists, skipping creation."
 fi
-
-set -e
 
 create_spark_conn() {
   airflow connections add 'spark_default' \
