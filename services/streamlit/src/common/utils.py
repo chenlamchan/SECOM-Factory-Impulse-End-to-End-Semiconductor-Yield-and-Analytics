@@ -126,8 +126,19 @@ def get_trino_engine():
             if attempt == 4:
                 raise
             time.sleep(3 * (attempt + 1))
- 
-c
+
+@st.cache_data(ttl=60, show_spinner=False)
+def query_trino(sql: str, schema: str = "gold") -> pd.DataFrame:
+    """Execute SQL against Trino, return DataFrame. Results cached 60 s."""
+    conn = trino.dbapi.connect(
+        host=service_config.trino_host,
+        port=service_config.trino_port,
+        user="admin",
+        catalog="secom_catalog",
+        schema=schema,
+    )
+
+    return pd.read_sql_query(sql, conn)
 
 # ---------------------------------------------------------------------------
 # S3 / MinIO helpers

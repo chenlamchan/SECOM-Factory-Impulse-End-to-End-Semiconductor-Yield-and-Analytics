@@ -237,6 +237,10 @@ services:
     volumes:
       - generator_data:/app/db
       - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
+      - ./services/streamlit/src/home.py:/app/home.py:ro
+      - ./services/streamlit/src/pages:/app/pages:ro
+      - ./services/streamlit/src/common:/app/common:ro
+      - ./services/streamlit/.streamlit:/app/.streamlit:ro
     command: streamlit run home.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
@@ -391,14 +395,17 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: False
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME: /opt/spark
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
       MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
+      AIRFLOW_ADMIN_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_admin_password.txt
       SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
-      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src 
+      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src
+      MONITORING_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/monitoring/src
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -411,6 +418,7 @@ services:
       - airflow_db_password
       - minio_user
       - minio_password
+      - airflow_admin_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: webserver
     restart: on-failure
@@ -432,16 +440,20 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: False
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
       AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+      AIRFLOW_ADMIN_PASSWORD_FILE: /run/secrets/airflow_admin_password
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
       MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_ADMIN_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_admin_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
       SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
-      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src 
+      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src
+      MONITORING_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/monitoring/src
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -454,6 +466,7 @@ services:
       - airflow_db_password
       - minio_user
       - minio_password
+      - airflow_admin_password
     entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
     command: scheduler
     restart: on-failure

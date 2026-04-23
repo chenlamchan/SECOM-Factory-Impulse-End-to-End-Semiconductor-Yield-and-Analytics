@@ -74,7 +74,18 @@ def load_executive_data():
                 FROM gold_oee_metrics
                 WHERE process_date = (SELECT md FROM max_d)
             """)
-        return kpis, trend, alarms, quarantine, oee_today
+
+            ml_health = query_trino("""
+                WITH max_d AS (SELECT MAX(prediction_date) AS md FROM gold_model_predictions)
+                SELECT 
+                    COUNT(*) as total_predictions,
+                    AVG(defect_probability) as avg_p_fail,
+                    SUM(CASE WHEN prediction = 1 THEN 1 ELSE 0 END) as predicted_failures,
+                    MAX(model_version) as active_model_version
+                FROM gold_model_predictions
+                WHERE prediction_date = (SELECT md FROM max_d)
+            """)
+        return kpis, trend, alarms, quarantine, oee_today, ml_health
 
     except Exception as e:
         st.error(f"Trino query failed: {e}")
@@ -87,7 +98,7 @@ def load_executive_data():
 @st.fragment(run_every="30s")
 def render_dashboard():
     
-    kpis, trend, alarms, quarantine, oee_today = load_executive_data()
+    kpis, trend, alarms, quarantine, oee_today, ml_health = load_executive_data()
     
     if kpis is None or kpis.empty:
         st.error("⚠️ Trino Cluster is currently unavailable or returned no data.")
@@ -118,7 +129,7 @@ def render_dashboard():
     # ------------------------------------------------------------------
     # Top KPI row
     # ------------------------------------------------------------------
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
  
     if not kpis.empty:
         row = kpis.iloc[0]
@@ -153,6 +164,13 @@ def render_dashboard():
         col4.metric("Scrap / Quarantine", "—")
  
     col5.metric("SPC Alarms (24h)", len(alarms) if not alarms.empty else 0)
+
+    if not ml_health.empty and not pd.isna(ml_health.iloc[0]["total_predictions"]):
+        ml_row = ml_health.iloc[0]
+        avg_pfail = float(ml_row["avg_p_fail"]) * 100
+        col6.metric("Predicted Yield Risk", f"{avg_pfail:.1f}%", help="Average Defect Probability predicted by ML for today's wafers")
+    else:
+        col6.metric("Predicted Yield Risk", "—")
  
     st.divider()
  
@@ -282,5 +300,7 @@ with st.sidebar:
     | OEE Equipment | Line efficiency breakdown |
     | Failure Analysis | Pareto, correlation heatmap |
     | ML Insights | Predictive yield, drift |
+    | Model Cards | MLflow registry & artifacts |
+    | Actionable AI | Recourse & Perf. Estimation |
     | Simulator | Multi-line generator control |
     """)
