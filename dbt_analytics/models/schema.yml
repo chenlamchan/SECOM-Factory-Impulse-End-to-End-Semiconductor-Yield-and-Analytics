@@ -8,7 +8,7 @@ models:
         tests:
           - unique
           - not_null
-      - name: wafer_status
+      - name: test_outcome
         tests:
           - accepted_values:
               values: ['Pass', 'Fail', 'Unknown']
