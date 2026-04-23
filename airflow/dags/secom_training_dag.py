@@ -3,10 +3,14 @@ secom_ml_training_dag.py — MLOps Level 2 Training Pipeline
 ────────────────────────────────────────────────────────────
 Full automated training pipeline aligned with Google MLOps Level 2:
  
-  Step 1 — extract_features    : PySpark reads silver Iceberg → writes ml.feature_snapshot
- 
-All steps run as DockerOperator using secom-ml-trainer:latest.
-PySpark steps connect to the existing Spark cluster (spark://spark-master:7077).
+  Step 1 — extract_features   : PySpark reads silver Iceberg → ml.feature_snapshot
+  Step 2 — prepare_features   : PySpark temporal split → train/test Iceberg tables
+  Step 3 — train_model        : XGBoost vs LightGBM, logs winner run_id to MinIO
+  Step 3b — calibrate_model   : Platt scaling on winner; logs CBPE reference data  ← NEW
+  Step 4 — evaluate_model     : Held-out test metrics, SHAP artifacts
+  Step 5 — validate_model     : Champion gate — AUC/F1 delta vs Production
+  Step 6 — promotion_gate     : ShortCircuit — halt if not promoted
+  Step 7 — reload_serving_api : curl /reload to hot-swap champion in serving container
 """
 
 import os
@@ -160,6 +164,20 @@ with DAG(
         network_mode='end-to-end-semiconductor-yield-and-analytics_default',
     )
 
+    calibrate_model = DockerOperator(
+        task_id="calibrate_model",
+        image="secom-ml-trainer:latest",
+        api_version="auto",
+        auto_remove=True,
+        command=f"python /spark_jobs/calibrate_model.py --manifest-path {MANIFEST_S3_URI}",
+        docker_url="unix://var/run/docker.sock",
+        environment=COMMON_ENV,
+        mounts=DOCKER_MOUNTS,
+        mount_tmp_dir=False,
+        do_xcom_push=False,
+        network_mode='end-to-end-semiconductor-yield-and-analytics_default',
+    )
+
     evaluate_model = DockerOperator(
         task_id="evaluate_model",
         image="secom-ml-trainer:latest",
@@ -206,4 +224,13 @@ with DAG(
         bash_command="curl -X POST http://ml-serving:8001/reload"
     )
 
-    extract_features >> prepare_features >> train_model >> evaluate_model >> validate_model >> promotion_gate >> reload_serving_api
+    (
+        extract_features
+        >> prepare_features
+        >> train_model
+        >> calibrate_model       
+        >> evaluate_model
+        >> validate_model
+        >> promotion_gate
+        >> reload_serving_api
+    )

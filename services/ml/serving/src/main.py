@@ -33,6 +33,7 @@ import s3fs
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from config import ServiceConfig
+from serving_extensions import router as explain_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -176,6 +177,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(explain_router, prefix="/explain", tags=["explainability"])
+
 
 # ─── Request / Response schemas ───────────────────────────────────────────────
 class WaferFeatures(BaseModel):
@@ -296,10 +299,10 @@ async def predict(features: WaferFeatures):
 
     try:
         prob    = float(_state.model.predict_proba(df)[0, 1])
-        sv      = _state.explainer.shap_values(df)
-        if isinstance(sv, list):
-            sv = sv[1]   # LightGBM positive class
-        shap_vals = sv[0]
+        # sv      = _state.explainer.shap_values(df)
+        # if isinstance(sv, list):
+            # sv = sv[1]   # LightGBM positive class
+        # shap_vals = sv[0]
     except Exception as e:
         logger.error("Prediction error: %s", e)
         raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
@@ -310,7 +313,7 @@ async def predict(features: WaferFeatures):
         yield_probability = round(1.0 - prob, 6),
         prediction        = "Fail" if prob >= 0.5 else "Pass",
         confidence_band   = _confidence_band(prob),
-        top_drivers       = _top_shap_drivers(shap_vals, _state.feature_names),
+        # top_drivers       = _top_shap_drivers(shap_vals, _state.feature_names),
         model_version     = str(_state.version),
         model_name        = MODEL_NAME,
     )

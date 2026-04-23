@@ -6,6 +6,7 @@ Two DAGs in one file:
   1. secom_ml_daily_operations   — runs daily. 
      • Executes drift_monitor.py (computes PSI, publishes NATS alert).
      • Executes batch_inference.py (scores today's silver data).
+     • Executes performance_estimator.py (CBPE — estimates AUC/F1 without labels)
      • Triggers dbt to refresh gold_model_predictions.
 
   2. secom_ml_drift_listener  — polls the NATS ml.drift.alert subject
@@ -66,6 +67,7 @@ COMMON_ENV = {
     "DRIFT_LOOKBACK_DAYS":      "7",
     "NATS_ENDPOINT":            NATS_URL,
     "EVIDENTLY_BUCKET":         "evidently-reports",
+    "ML_PREDICTIONS_BUCKET":    "ml-predictions",
 }
 
 # Unified Mounts for Secrets, Inference, and Monitoring scripts
@@ -124,6 +126,20 @@ with DAG(
         mount_tmp_dir=False,
     )
 
+    # Step 4: CBPE performance estimation without ground-truth labels
+    run_performance_estimator = DockerOperator(
+        task_id="run_performance_estimator",
+        image=ML_TRAINER_IMAGE,
+        command="python /monitoring/performance_estimator.py",
+        network_mode=NETWORK,
+        auto_remove=True,
+        docker_url="unix://var/run/docker.sock",
+        mounts=DOCKER_MOUNTS,
+        environment=COMMON_ENV,
+        mount_tmp_dir=False,
+        do_xcom_push=True,   # captures JSON estimate summary for task logs
+    )
+
     # Step 3: Refresh gold_model_predictions via dbt
     refresh_gold_predictions = DockerOperator(
         task_id="refresh_gold_predictions",
@@ -136,7 +152,7 @@ with DAG(
         docker_url="unix://var/run/docker.sock",
     )
 
-    run_drift_monitor >> run_batch_inference >> refresh_gold_predictions
+    run_drift_monitor >> run_batch_inference >> run_performance_estimator >> refresh_gold_predictions
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
