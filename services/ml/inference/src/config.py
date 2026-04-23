@@ -13,7 +13,8 @@ class ServiceConfig(BaseSettings):
     catalog_user:str = Field(default="airflow")
     airflow_db_password_file:str
 
-    manifest_s3_uri: str = Field(default="s3a://ml-metadata/manifests/feature_manifest.json")
+    trino_host:str = Field(default="trino")
+    trino_port:str = Field(default="8080")
 
     @property
     def minio_access_key(self):

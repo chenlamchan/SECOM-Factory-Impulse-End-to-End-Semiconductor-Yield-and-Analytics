@@ -120,9 +120,9 @@ def _smoke_test(model_uri: str, model_type: str, feature_names: list, cat_featur
 
 def main():
     parser = argparse.ArgumentParser(description="SECOM ML — Champion Gate")
-    parser.add_argument("--auc-min-delta", type=float, default=-0.005,
+    parser.add_argument("--auc-min-delta", type=float, default=0.001,
                         help="Min AUC improvement vs production (negative = allow regression).")
-    parser.add_argument("--f1-min-delta",  type=float, default=-0.010)
+    parser.add_argument("--f1-min-delta",  type=float, default=0.001)
     parser.add_argument("--model-name",    default=None)
     parser.add_argument("--manifest-path", default="/tmp/feature_manifest.json")
     args = parser.parse_args()

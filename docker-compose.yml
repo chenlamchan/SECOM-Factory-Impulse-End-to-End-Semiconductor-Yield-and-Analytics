@@ -398,6 +398,7 @@ services:
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
       SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
+      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src 
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -440,6 +441,7 @@ services:
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
       AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
       SPARK_JOB_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/training/src
+      BATCH_JOBS_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/services/ml/inference/src 
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
@@ -505,7 +507,6 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       MODEL_NAME: secom_yield_predictor
-      MODEL_STAGE: Production
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
     secrets:
