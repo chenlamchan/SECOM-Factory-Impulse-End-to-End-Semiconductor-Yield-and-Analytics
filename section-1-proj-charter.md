@@ -6,7 +6,7 @@ Failures are discovered at end-of-line inspection, too late to intervene, result
 
 The business question: 
 - Can we predict wafer yield failure from in-process sensor data, early enough for intervention?
-- Can we reduce the test time by reducing the number of test variables in overall?
+- Can we have a prescriptive analysis alongside with prediction model to produce an action plan?
 
 ---
 #### 1.2 Project Objective
@@ -21,6 +21,8 @@ Build an end-to-end data platform that
    - Model Building & Training: Train model to achieve the business requirements with experiment logged.
    - Model Evaluation: Evaluate the model with test dataset with result logged. (Iterative experiment)
    - Model Validation: Exposes yield failure predictions and key signal analysis based on the ML model, and to compare the test (features) involved, the predicted output, yield andother related business metrics comparing to full test.
+5. Actionable AI:
+   - Counterfactual Explanability: To provide insight on the possible action/tweak to improve the failure rate.
   
 This is a portfolio project demonstrating data engineering with ML analytics, system design and AI-augmented development workflow. 
 
