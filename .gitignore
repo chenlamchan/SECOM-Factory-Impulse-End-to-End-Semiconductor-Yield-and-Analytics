@@ -28,3 +28,5 @@ state/
 
 # Lock files and metadata
 package-lock.yml
+
+**/.ipynb_checkpoints
