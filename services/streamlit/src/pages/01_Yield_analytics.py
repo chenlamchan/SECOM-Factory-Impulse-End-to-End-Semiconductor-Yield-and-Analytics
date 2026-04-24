@@ -135,7 +135,8 @@ if not daily.empty:
 
     global_period_agg["yield_percentage"] = (global_period_agg["passed_wafers"] / global_period_agg["total_wafers_tested"].replace(0, np.nan)) * 100
     global_period_agg["ppm_defective"] = (global_period_agg["failed_wafers"] / global_period_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-    global_period_agg = global_period_agg.sort_values("process_date", ascending=False)
+    global_period_agg = global_period_agg.sort_values("process_date", ascending=True)
+    global_period_agg["yield_rolling_7d"] = global_period_agg["yield_percentage"].rolling(window=7, min_periods=1).mean()
 
     global_period_total_tested = global_period_agg["total_wafers_tested"].sum()
     global_period_passed = global_period_agg["passed_wafers"].sum()
@@ -240,18 +241,27 @@ with tab_trend:
 
         global_line_agg["yield_percentage"] = (global_line_agg["passed_wafers"] / global_line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
         global_line_agg["ppm_defective"] = (global_line_agg["failed_wafers"] / global_line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-        global_line_agg = global_line_agg.sort_values("process_date", ascending=False)
+        global_line_agg = global_line_agg.sort_values(["line_id","process_date"], ascending=True)
+        global_line_agg["rolling_yield"] = (
+            global_line_agg.groupby("line_id")["yield_percentage"]
+            .transform(lambda x: x.rolling(window=7, min_periods=1).mean())
+        )
 
         # Plot individual lines
         fig = px.line(
-            global_line_agg, x="process_date", y="yield_percentage", color="line_id",
-            markers=True, color_discrete_sequence=[TEAL, BLUE, AMBER],
-            labels={"yield_percentage": "Yield %", "process_date": "Date", "line_id": "Line"}
+            global_line_agg, 
+            x="process_date", 
+            y="rolling_yield", # Use the rolling column for the lines
+            color="line_id",
+            color_discrete_sequence=[TEAL, BLUE, CORAL],
+            labels={"rolling_yield": "7D Avg Yield %", "process_date": "Date", "line_id": "Line"}
         )
 
+        fig.update_traces(opacity=0.4, selector=dict(type='scatter', mode='lines'))
+
         fig.add_trace(go.Scatter(
-            x=global_period_agg["process_date"], y=global_period_agg["yield_percentage"],
-            name="Overall", mode="lines",
+            x=global_period_agg["process_date"], y=global_period_agg["yield_rolling_7d"],
+            name="Overall 7 Day Trend", mode="lines",
             line=dict(color=AMBER, dash="dot", width=1.5),
         ))
 
@@ -265,11 +275,14 @@ with tab_trend:
         fig.update_layout(
             **PLOTLY_LAYOUT, height=450,
             title=f"Yield % by Line & Overall DPPM — last {window_days} days",
-            yaxis=dict(title="Yield %", range=[0, 100]),
+            yaxis=dict(title="Yield %", range=[-2, 105]),
             yaxis2=dict(title="Overall DPPM", overlaying="y", side="right",
                         gridcolor="rgba(0,0,0,0)"),
             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=0.5)
         )
+
+        fig.update_traces(cliponaxis=False)
+
         st.plotly_chart(fig, use_container_width=True, key='global_yield_chart')
     else:
         st.info("No daily yield data found.")
@@ -341,6 +354,10 @@ with tab_line:
         if not daily.empty:
             for line in lines_filter:
                 line_df = daily[daily["line_id"] == line]
+
+                if line_df.empty:
+                    continue 
+
                 line_max_date = line_df["process_date"].max()
                 line_min_date = line_max_date - pd.Timedelta(days=window_days)
                 line_start_str = line_min_date.strftime('%Y-%m-%d')
@@ -360,7 +377,8 @@ with tab_line:
 
                 line_agg["yield_percentage"] = (line_agg["passed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
                 line_agg["ppm_defective"] = (line_agg["failed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-                line_agg = line_agg.sort_values("process_date", ascending=False)
+                line_agg = line_agg.sort_values("process_date", ascending=True)
+                line_agg["yield_rolling_7d"] = line_agg["yield_percentage"].rolling(window=7, min_periods=1).mean()
 
                 line_total_tested = line_agg["total_wafers_tested"].sum()
                 line_passed = line_agg["passed_wafers"].sum()
@@ -372,11 +390,17 @@ with tab_line:
                 st.caption(f"📅 **Data Range:** {line_start_str} to {line_end_str}")
 
                 # Render the time plot for the individual line trendline
-                fig = px.line(
+                fig = px.scatter(
                     line_agg, x="process_date", y="yield_percentage",
-                    markers=True, color_discrete_sequence=[TEAL],
+                    color_discrete_sequence=[TEAL], opacity=0.4,
                     labels={"yield_percentage": "Yield %", "process_date": "Date"}
                 )
+
+                fig.add_trace(go.Scatter(
+                    x=line_agg["process_date"], y=line_agg["yield_rolling_7d"],
+                    mode="lines", name="7-Day Trend",
+                    line=dict(color=TEAL, width=3)
+                ))
 
                 # Add Overall DPPM on secondary axis
                 fig.add_trace(go.Bar(
@@ -389,11 +413,13 @@ with tab_line:
                     **PLOTLY_LAYOUT, 
                     height=350,
                     margin=dict(l=0, r=0, t=20, b=0),
-                    yaxis=dict(title="Yield %", range=[0, 100]),
+                    yaxis=dict(title="Yield %", range=[-2, 105]),
                     yaxis2=dict(title="Overall DPPM", overlaying="y", side="right",
                                 gridcolor="rgba(0,0,0,0)"),
                     legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1)
                 )
+
+                fig.update_traces(cliponaxis=False)
 
                 st.plotly_chart(fig, use_container_width=True, key=f"yield_chart_{line}")
 

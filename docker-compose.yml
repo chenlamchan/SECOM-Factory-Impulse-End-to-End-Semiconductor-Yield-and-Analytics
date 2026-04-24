@@ -17,9 +17,6 @@ services:
     environment:
       MINIO_ROOT_USER_FILE: /run/secrets/minio_user
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
-
-      MINIO_PROMETHEUS_AUTH_TYPE: "public"
-      MINIO_PROMETHEUS_JOB_ID: "minio"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -33,7 +30,6 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - prometheus_secrets:/secrets
       - ./infrastructures/minio/init-minio.sh:/init-minio.sh
     entrypoint: /bin/bash
     secrets:
@@ -63,8 +59,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -h localhost -U $(cat /run/secrets/postgres_user) -d postgres"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 30s
+      retries: 15
+      start_period: 60s
 
   postgres-init:
     image: postgres:15-alpine
