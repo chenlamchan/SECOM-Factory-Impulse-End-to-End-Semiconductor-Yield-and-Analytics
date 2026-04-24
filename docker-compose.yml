@@ -42,88 +42,6 @@ services:
     command: /init-minio.sh
 
   # ==========================================================================
-  # OpenTelemetry Collector (The Heart of Modern Observability)
-  # ==========================================================================
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.93.0
-    container_name: otel-collector
-    command: [ "--config=/etc/otel-collector-config.yml" ]
-    volumes:
-      - ./infrastructures/otel/otel-collector-config.yml:/etc/otel-collector-config.yml
-    env_file: .env
-    ports:
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
-      - "8888:8888"   # Prometheus metrics (collector's own metrics)
-      - "8889:8889"   # Prometheus exporter (application metrics)
-
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/health/status" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # ==========================================================================
-  # Prometheus (Metrics Storage)
-  # ==========================================================================
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.enable-lifecycle'
-      - '--enable-feature=exemplar-storage'
-    volumes:
-      - ./infrastructures/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./infrastructures/prometheus/alerts/:/etc/prometheus/alerts/
-      - prometheus_data:/prometheus
-      - prometheus_secrets:/etc/prometheus/secrets/:ro
-    ports:
-      - "9090:9090"
-    env_file: .env
-    secrets:
-      - minio_user
-      - minio_password
-    environment:
-      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
-      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
-    depends_on:
-      otel-collector:
-        condition: service_started
-      minio-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ==========================================================================
-  # Grafana (Metrics Visualization)
-  # ==========================================================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
-    secrets:
-      - grafana_password
-    env_file: .env
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
-      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor,traceToMetrics
-      GF_INSTALL_PLUGINS: grafana-piechart-panel
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
-      - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
-
-  # ==========================================================================
   # Postgres (Catalog & Metadata)
   # ==========================================================================
   postgres:
@@ -236,49 +154,6 @@ services:
     command: streamlit run home.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
 
 # ============================================================================
-# Spark (Processing)
-# ============================================================================
-  spark-master:
-      image: apache/spark:3.5.3-python3
-      container_name: spark-master
-      command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
-      ports:
-        - "8080:8080"  # Spark UI
-        - "7077:7077"  # Spark Master
-      volumes:
-        - spark_master_data:/opt/spark/data
-      healthcheck:
-        test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080')\" || exit 1"]
-        interval: 10s
-        timeout: 5s
-        retries: 5
-        start_period: 90s
-
-  spark-worker:
-    build:
-      context: ./spark
-      dockerfile: Dockerfile
-    container_name: spark-worker
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-    depends_on:
-      - spark-master
-    environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
-      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
-    secrets:
-      - minio_user
-      - minio_password
-    volumes:
-      - spark_worker_data:/opt/spark/data
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://127.0.0.1:8081" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-# ============================================================================
 # Ephemeral Ingestor (Builds the image for Airflow DockerOperator)
 # ============================================================================
   bronze-ingestor:
@@ -377,8 +252,6 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-      spark-master:
-        condition: service_healthy
     ports:
       - "8081:8080" # Mapped to 8081 to avoid conflict with Spark UI
     env_file: .env
@@ -389,7 +262,6 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
       AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      SPARK_HOME: /opt/spark
       DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
       MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
       MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
@@ -398,7 +270,6 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
-      - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
       - /var/run/docker.sock:/var/run/docker.sock
     secrets:
@@ -417,8 +288,6 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-      spark-master:
-        condition: service_healthy
     env_file: .env
     user: "50000:${DOCKER_GID}"
     environment:
@@ -438,7 +307,6 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
-      - ./spark/spark_jobs:/opt/airflow/spark_jobs
       - ./dbt_analytics:/opt/airflow/dbt_analytics
       - /var/run/docker.sock:/var/run/docker.sock
     secrets:
@@ -454,14 +322,9 @@ services:
 # ============================================================================
 volumes:
   minio_data:
-  prometheus_data:
-  prometheus_secrets:
-  grafana_data:
   generator_data:
   nats-data:
   postgres_data:
-  spark_master_data:
-  spark_worker_data:
 
 # ============================================================================
 # Docker Secrets

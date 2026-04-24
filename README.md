@@ -29,6 +29,14 @@ The solution utilizes a **Medallion Lakehouse** pattern to decouple high-frequen
   - [Executive Summary](#executive-summary)
   - [System Overview \& Architecture](#system-overview--architecture)
   - [Data Modeling \& Storage Strategy](#data-modeling--storage-strategy)
+  - [Key Engineering Challenges](#key-engineering-challenges)
+  - [ML \& Actionable AI (Development Branch)](#ml--actionable-ai-development-branch)
+  - [How to Run](#how-to-run)
+  - [Roadmap \& Future Work](#roadmap--future-work)
+  - [Author](#author)
+  - [License](#license)
+  - [Appendices: Dashboard Overview](#appendices-dashboard-overview)
+  - [Attribution](#attribution)
 
 ---
 
@@ -59,6 +67,7 @@ Key Architectural Decision (More detail in [ADR](section3-ADR.md)):
 | **Data Handshake** | **NATS JetStream** | A lightweight broker for event-driven ingestion. Chosen over Kafka for its lower resource footprint in local environments. |
 | **Compute Engine** | **PyIceberg/PyArrow** | Ephemeral ingestion pattern using Docker containers to append data. Prevents the overhead of a permanent Spark cluster. |
 | **Transformation** | **dbt + Trino** | Enables a modular, version-controlled transformation layer for reproducibility and reusability.  |
+| **Serving** | **Streamlit** | Unified serving for executive dashboards. |
 
 <!-- omit from toc -->
 #### The Data Flow:
@@ -81,3 +90,93 @@ Key Architectural Decision (More detail in [ADR](section3-ADR.md)):
 * **Golden Line Benchmarking:** Specification Limits ($USL/LSL$) are derived strictly from "Line A" (standard, raw SECOM data) to create a universal factory benchmark, while Control Limits ($UCL/LCL$) remain local to each specific tester.
 
 ---
+
+This is the comprehensive analysis of your semiconductor analytics platform. I have synthesized the Project Charter, ADRs, core data logic, and the Streamlit UI components into a professional GitHub portfolio README.
+
+---
+### Key Engineering Challenges
+
+The key engineering challenges for this project is that the SECOM dataset stem primarily from its lack of metadata, specific sensor names, and engineering tolerances, which complicates the creation of a realistic manufacturing simulation. 
+
+| Challenge | Context (SECOM Specific) | Mitigation Implemented |
+| :--- | :--- | :--- |
+| **Lack of Engineering Specifications** | The dataset provides ~590 sensor readings without metadata on units, names, or allowable operating ranges ($USL$/$LSL$). | **Golden Line Benchmarking (ADR-012):** Designated Line A as the "Golden Line" factory standard. Reverse-engineered global specifications by targeting a $Cpk = 1.33$ based on the first 100 "clean" observations from Line A. |
+| **Preserving Temporal & Statistical Topology** | Simulating sensor data risks losing the inherent time-series behavior and the specific "missingness" patterns found in the raw dataset. | **Sequential Block-Day Resampling:** The generator samples data in sequential "date blocks" to preserve chronological behavior. Mutations are applied only to non-null cells to maintain the original "missingness topology". |
+| **Synthetic Repetition & Determinism** | Replaying historical data creates repeating patterns that fail to simulate the natural measurement "jitter" or sensor noise found in real production. | **Stochastic Mutation Engine:** Implemented controlled jitter via a `jitter_variance` parameter in the `DataGeneratorDaemon`. This injects randomized micro-noise (Gaussian) scaled by local standard deviations to ensure lot-to-lot uniqueness. |
+| **Outlier Pollution in Baselines** | Raw sensor data contains extreme values that can inflate variance, leading to "limit chasing" where control limits expand to hide process drift. | **2-Pass Asset-Specific Baseline (ADR-009):** Implemented a Phase I "Frozen" baseline logic. It performs an initial filtering pass to identify and exclude anomalies ($\pm3\sigma_{raw}$) before calculating final, stable control limits. |
+
+---
+### ML & Actionable AI (Development Branch)
+
+> **Note:** The following features are currently under development in the `feature/ml-analytics` branch and are provided as a showcase of the target architecture.
+
+Features:
+* **MLOps Level 2 Pipeline:** Automated Champion/Challenger training with automated promotion gates based on AUC deltas.
+  
+* **Probability Calibration:** Post-hoc **Platt Scaling** (Sigmoid calibration) to ensure predicted probabilities are reliable for confidence-based thresholding. (To simulate the delayed ground truth condition.)
+  
+* **Drift Monitoring:** Continuous monitoring of Population Stability Index (PSI) using Evidently, with automated NATS alerts to trigger retraining DAGs.
+  
+* **Counterfactual Explanations:** Generating actionable suggestion for example minimal sensor adjustments required to flip a predicted failure to a pass.
+  
+
+---
+### How to Run
+
+This project is fully containerized.
+**Prerequisites**: Docker Engine & 16GB+ RAM.
+
+1. Clone the repository.
+2. Place the uci-secom.csv in data/raw/.
+3. Initialize the stack: 
+   `make build`
+   `make up`
+4. Access the Home Page: http://localhost:8501
+
+---
+### Roadmap & Future Work
+
+* **Resilience:** Implementation of comprehensive exception handling and graceful shutdown for all microservices.
+  
+* **Pipeline Reliability:** Integration of Retry logic, Schema Evolution support, and Dead Letter Queues (DLQ).
+  
+* **Data Lake Maintenance:** Automated small file compaction for Iceberg tables.
+  
+* **Governance & Quality:** Full implementation of Data Contracts, Data Lineage, and Observability.
+  
+* **Site Reliability Engineering:** Implementation of monitoring, observability and alerting for the operation of microservices.
+  
+* **DevOps:** Infrastructure as Code (Terraform) and standardized CI/CD pipelines.
+  
+* **Testing:** Expansion of unit and integration test coverage.
+
+---
+### Author
+- [Chen Lam](https://github.com/chenlamchan)
+
+I am always looking to elevate my work, and I view every project as a stepping stone. 
+I genuinely welcome and seek out constructive criticism and improvement suggestions on my approach, code architecture, or documentation.
+Let's make this code better together—feel free to connect with your thoughts!
+
+---
+### License
+This project is open source and available under the [MIT License](LICENSE).
+
+---
+### Appendices: Dashboard Overview
+1. Executive Overview: Headline KPIs (Yield, DPPM, Scrap Rate) with an active alarm banner for 24-hour SPC violations.
+   
+2. SPC Monitor: Interactive X-Charts with violation markers and $Cpk$ gauges for short-term and long-term capability.
+   
+3. Yield Analytics: N-day rolling trends and GitHub-style calendar heatmaps for factory-wide yield visualization.
+   
+4. Failure Analysis: Point-biserial correlation Pareto charts and multicollinearity scatter matrices identifying correlated sensors.
+
+5. Simulator: Control center for the generation of synthetic data, quick test on the effect of sigma shift and generation log.
+
+---
+### Attribution
+
+McCann, M. & Johnston, A. (2008). SECOM [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C54305.
+
+Architecture diagram is generated with the help by Google Gemini.
