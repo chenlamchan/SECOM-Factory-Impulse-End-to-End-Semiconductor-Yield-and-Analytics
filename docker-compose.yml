@@ -17,9 +17,6 @@ services:
     environment:
       MINIO_ROOT_USER_FILE: /run/secrets/minio_user
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
-
-      MINIO_PROMETHEUS_AUTH_TYPE: "public"
-      MINIO_PROMETHEUS_JOB_ID: "minio"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -33,7 +30,6 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - prometheus_secrets:/secrets
       - ./infrastructures/minio/init-minio.sh:/init-minio.sh
     entrypoint: /bin/bash
     secrets:
@@ -42,95 +38,289 @@ services:
     command: /init-minio.sh
 
   # ==========================================================================
-  # OpenTelemetry Collector (The Heart of Modern Observability)
+  # Postgres (Catalog & Metadata)
   # ==========================================================================
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.93.0
-    container_name: otel-collector
-    command: [ "--config=/etc/otel-collector-config.yml" ]
-    volumes:
-      - ./infrastructures/otel/otel-collector-config.yml:/etc/otel-collector-config.yml
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    stop_grace_period: 1m
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     env_file: .env
     ports:
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
-      - "8888:8888"   # Prometheus metrics (collector's own metrics)
-      - "8889:8889"   # Prometheus exporter (application metrics)
-
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/health/status" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # ==========================================================================
-  # Prometheus (Metrics Storage)
-  # ==========================================================================
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.enable-lifecycle'
-      - '--enable-feature=exemplar-storage'
+      - "5432:5432"
     volumes:
-      - ./infrastructures/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./infrastructures/prometheus/alerts/:/etc/prometheus/alerts/
-      - prometheus_data:/prometheus
-      - prometheus_secrets:/etc/prometheus/secrets/:ro
-    ports:
-      - "9090:9090"
-    env_file: .env
+      - postgres_data:/var/lib/postgresql/data
     secrets:
-      - minio_user
-      - minio_password
+      - postgres_password
+      - postgres_user
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U $(cat /run/secrets/postgres_user) -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+
+  postgres-init:
+    image: postgres:15-alpine
+    container_name: postgres-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./infrastructures/postgres/postgres-init.sh:/init-postgres.sh
+    secrets:
+      - postgres_user
+      - postgres_password
+      - airflow_db_password
+    env_file: .env
+    entrypoint: ['/bin/sh','/init-postgres.sh']
+
+  # ==========================================================================
+  # Nats (As message broker - like AWS SQS)
+  # ==========================================================================
+  nats:
+    image: nats:latest
+    container_name: nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -sd /data"
+    volumes: 
+      - nats-data:/data
+
+  # ==========================================================================
+  # Synthetic Data Generator
+  # ==========================================================================
+  generator-engine:
+    build:
+      context: ./services/synthetic-data-generator
+      dockerfile: Dockerfile
+    container_name: generator-engine
+    env_file: .env
     environment:
       MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
+      DB_PATH: /app/db/simulation_state.db
+      
     depends_on:
-      otel-collector:
+      minio:
+        condition: service_healthy
+      nats:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ==========================================================================
-  # Grafana (Metrics Visualization)
-  # ==========================================================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
     secrets:
-      - grafana_password
+      - minio_user
+      - minio_password
+    volumes:
+      - generator_data:/app/db
+      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
+    command: python generator_daemon.py
+
+# ============================================================================
+# Streamlit (UI)
+# ============================================================================
+  ui:
+    build:
+      context: ./services/streamlit
+      dockerfile: Dockerfile
+    container_name: ui
+    ports:
+      - "8501:8501"
     env_file: .env
     environment:
-      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
-      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor,traceToMetrics
-      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      RAW_DATASET_FILE: /app/data/raw/uci-secom.csv
+      DB_PATH: /app/db/simulation_state.db
+    depends_on:
+      minio:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      trino:
+        condition: service_healthy
+    secrets:
+      - minio_user
+      - minio_password
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infrastructures/grafana/provisioning:/etc/grafana/provisioning
-      - ./infrastructures/grafana/dashboards:/var/lib/grafana/dashboards
+      - generator_data:/app/db
+      - ./data/raw/uci-secom.csv:/app/data/raw/uci-secom.csv:ro
+    command: streamlit run home.py --browser.gatherUsageStats false --server.port=8501 --server.address=0.0.0.0
+
+# ============================================================================
+# Ephemeral Ingestor (Builds the image for Airflow DockerOperator)
+# ============================================================================
+  bronze-ingestor:
+    build:
+      context: ./services/raw_to_bronze_ingestor
+      dockerfile: Dockerfile
+    container_name: bronze-ingestor
+    image: pyiceberg-ingestor:latest
+    profiles:
+      - bronze-ingestor
+
+# ============================================================================
+# dbt
+# ============================================================================
+  dbt:
+    build:
+      context: ./services/dbt
+      dockerfile: Dockerfile
+    container_name: dbt
+    image: end-to-end-semiconductor-yield-and-analytics-dbt:latest
+    volumes:
+      - ./dbt_analytics:/dbt
+    profiles:
+      - dbt
+
+# ============================================================================
+# Trino (SQL Engine for dbt & BI)
+# ============================================================================
+  trino:
+    build:
+      context: ./services/trino
+      dockerfile: Dockerfile
+    hostname: trino
+    container_name: trino
+    ports:
+      - "8090:8080" # Trino UI
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    secrets:
+      - minio_password
+      - minio_user
+      - airflow_db_password
+    environment:
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/minio_user
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD: /run/secrets/airflow_db_password
+    env_file: .env
+    command: >
+      bash -c "
+        # 1. Read secrets from files and export them as env vars
+        #    Trino's S3 connector automatically reads these specific vars.
+        export AWS_ACCESS_KEY_ID=$(cat /run/secrets/minio_user)
+        export AWS_SECRET_ACCESS_KEY=$$(cat /run/secrets/minio_password)
+        export AIRFLOW_DB_PASSWORD=$$(cat /run/secrets/airflow_db_password)
+
+        # 2. Run the original Trino startup command
+        /usr/lib/trino/bin/run-trino
+      "
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: on-failure
+
+# ============================================================================
+# Orchestration (Apache Airflow)
+# ============================================================================
+  airflow-init:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-init
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    volumes:
+      - ./infrastructures/airflow/airflow-init.sh:/airflow-init.sh:ro
+    secrets:
+      - airflow_admin_password
+      - airflow_db_password
+    entrypoint: ['/bin/bash', "/airflow-init.sh"]
+    
+  airflow-webserver:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8080" # Mapped to 8081 to avoid conflict with Spark UI
+    env_file: .env
+    user: "50000:${DOCKER_GID}"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - airflow_db_password
+      - minio_user
+      - minio_password
+    entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
+    command: webserver
+    restart: on-failure
+
+  airflow-scheduler:
+    build:
+      context: ./services/airflow
+      dockerfile: Dockerfile
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    env_file: .env
+    user: "50000:${DOCKER_GID}"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: False
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      MINIO_ACCESS_KEY_FILE: /run/secrets/minio_user
+      MINIO_SECRET_KEY_FILE: /run/secrets/minio_password
+      AIRFLOW_DB_PASSWORD_FILE: /run/secrets/airflow_db_password
+      DBT_PROJECT_PATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/dbt_analytics
+      MINIO_USER_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_user.txt
+      MINIO_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/minio_password.txt
+      AIRFLOW_DB_PWD_FILEPATH: /home/desktop/Portfolio/End-to-End-Semiconductor-Yield-and-Analytics/secrets/airflow_db_password.txt
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./infrastructures/airflow/airflow-entrypoint.sh:/airflow-entrypoint.sh
+      - ./dbt_analytics:/opt/airflow/dbt_analytics
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - airflow_db_password
+      - minio_user
+      - minio_password
+    entrypoint: ["/bin/bash", "/airflow-entrypoint.sh"]
+    command: scheduler
+    restart: on-failure
 
 # ============================================================================
 # Persistent Volumes
 # ============================================================================
 volumes:
   minio_data:
-  prometheus_data:
-  prometheus_secrets:
-  grafana_data:
+  generator_data:
+  nats-data:
+  postgres_data:
 
 # ============================================================================
 # Docker Secrets
@@ -143,3 +333,13 @@ secrets:
 
   grafana_password:
     file: ./secrets/grafana_password.txt
+
+  postgres_user:
+    file: ./secrets/postgres_user.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
+  airflow_admin_password:
+    file: ./secrets/airflow_admin_password.txt
+  airflow_db_password:
+    file: ./secrets/airflow_db_password.txt

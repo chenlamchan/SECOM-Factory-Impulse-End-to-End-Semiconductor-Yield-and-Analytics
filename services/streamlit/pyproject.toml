@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "synthetic-data-generator"
+version = "0.1.0"
+description = "This is a module to generate synthetic dataset based on the SECOM dataset, with capability to introdu"
+authors = ["ccl"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+streamlit = "^1.56.0"
+pandas = "^3.0.2"
+plotly = "^6.7.0"
+scipy = "^1.17.1"
+s3fs = "^2026.3.0"
+numpy = "^2.4.4"
+pydantic = "^2.12.5"
+pydantic-settings = "^2.13.1"
+nats-py = "^2.14.0"
+trino = "^0.337.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
