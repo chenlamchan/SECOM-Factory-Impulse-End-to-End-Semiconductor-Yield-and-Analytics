@@ -7,6 +7,7 @@ catboost_info/
 **/logs/
 *.tar.gz
 *.jar
+**/*.DS_Store
 
 # Ignore data
 *.csv
