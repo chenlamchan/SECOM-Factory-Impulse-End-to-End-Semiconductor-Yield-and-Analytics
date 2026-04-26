@@ -53,8 +53,8 @@ In semiconductor fabrication, monitoring thousands of sensor signals to predict 
 
 ### System Overview & Architecture
 
-Key Architectural Decision (More detail in [ADR](section3-ADR.md)): 
-- **Data Lakehouse**: Selected to provide a unified environment for both structured SQL-based reporting (OEE, Yield) and semi-structured sensor analysis. This approach offers the schema enforcement of a data warehouse with the low-cost storage flexibility required for high-frequency manufacturing telemetry.
+Key Architectural Decision: 
+- **Data Lakehouse**: Selected to provide a unified environment for both structured SQL-based reporting (OEE, Yield) and ML analytics. This approach offers the schema enforcement of a data warehouse with the low-cost storage flexibility required for high-frequency manufacturing telemetry.
   
 - **Tiered Processing Latency**: A hybrid approach was adopted to optimize resource utilization.
   - **Micro-batching**: Used for high-latency metrics such as OEE and Yield, where data is typically reviewed shift-by-shift.
@@ -165,14 +165,28 @@ This project is open source and available under the [MIT License](LICENSE).
 ---
 ### Appendices: Dashboard Overview
 1. Executive Overview: Headline KPIs (Yield, DPPM, Scrap Rate) with an active alarm banner for 24-hour SPC violations.
+![dashboard1](reports/figures/dashboard1.png)
    
-2. SPC Monitor: Interactive X-Charts with violation markers and $Cpk$ gauges for short-term and long-term capability.
+2. SPC Monitor: Interactive X-Charts with violation markers, $Cpk$ gauges for short-term and long-term capability, sensor health trend.
+![dashboard2-1](reports/figures/dashboard2-1.png)
+![dashboard2-2](reports/figures/dashboard2-2.png)
+![dashboard2-3](reports/figures/dashboard2-3.png)
    
 3. Yield Analytics: N-day rolling trends and GitHub-style calendar heatmaps for factory-wide yield visualization.
-   
-4. Failure Analysis: Point-biserial correlation Pareto charts and multicollinearity scatter matrices identifying correlated sensors.
+![dashboard3-1](reports/figures/dashboard3-1.png)
+![dashboard3-2](reports/figures/dashboard3-2.png)
+![dashboard3-3](reports/figures/dashboard3-3.png)
+![dashboard3-4](reports/figures/dashboard3-4.png)
 
-5. Simulator: Control center for the generation of synthetic data, quick test on the effect of sigma shift and generation log.
+4. Overall Equipment Effectiveness: Analysis of Availability, Performance and Quality of multiple production activities.
+![dashboard4](reports/figures/dashboard4.png)
+   
+5. Failure Analysis: Point-biserial correlation Pareto charts and multicollinearity scatter matrices identifying correlated sensors.
+![dashboard5-1](reports/figures/dashboard5-1.png)
+![dashboard5-2](reports/figures/dashboard5-2.png)
+
+6. Simulator: Control center for the generation of synthetic data, quick test on the effect of sigma shift and generation log.
+![dashboard6](reports/figures/dashboard6.png)
 
 ---
 ### Attribution
