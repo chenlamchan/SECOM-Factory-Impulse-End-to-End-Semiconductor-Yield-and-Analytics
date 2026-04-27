@@ -128,10 +128,13 @@ This project is fully containerized.
 
 1. Clone the repository.
 2. Place the uci-secom.csv in data/raw/.
-3. Initialize the stack: 
+3. Configure the dependencies file, and place them based on the [project structure](README-project-structure.md).
+   - Create `.env`: Refer to the demo [example](README-example_.env.md).
+   - Create `secrets` directory: To store the secret keys for Docker. Refer to demo [example](README-secrets.md).
+4. Initialize the stack: 
    `make build`
    `make up`
-4. Access the Home Page: http://localhost:8501
+5. Access the Home Page: http://localhost:8501
 
 ---
 ### Roadmap & Future Work
@@ -149,6 +152,8 @@ This project is fully containerized.
 * **DevOps:** Infrastructure as Code (Terraform) and standardized CI/CD pipelines.
   
 * **Testing:** Expansion of unit and integration test coverage.
+
+* **Refactor:** Documentation & refactor to optimise the code structure.
 
 ---
 ### Author
