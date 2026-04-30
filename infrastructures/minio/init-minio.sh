@@ -23,15 +23,4 @@ echo 'Setting MinIO bucket policy...'
 mc anonymous set public secom-minio/${BUCKET_NAME}
 mc anonymous set public secom-minio/${WAREHOUSE_NAME}
 
-echo "Generating Prometheus Token..."
-JSON_OUTPUT=$(mc admin prometheus generate secom-minio --json)
-
-# Parse JSON using Bash string manipulation (no extra tools needed)
-CLEAN=${JSON_OUTPUT//\"/}   # Remove all quotes
-TOKEN_TEMP=${CLEAN#*: }     # Remove everything before the colon
-TOKEN=${TOKEN_TEMP%\}}      # Remove the trailing brace
-
-echo $TOKEN > /secrets/minio_prometheus_token
-echo "✓ Token saved to /secrets/minio_prometheus_token"
-
 echo 'MinIO init complete.'

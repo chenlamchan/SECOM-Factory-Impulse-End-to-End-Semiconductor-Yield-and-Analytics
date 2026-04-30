@@ -1,10 +1,13 @@
 # Ignore compiled/build artifacts
 __pycache__/
 .pytest_cache/
+.ipynb_checkpoints/
+catboost_info/
 .idea/
 **/logs/
 *.tar.gz
 *.jar
+**/*.DS_Store
 
 # Ignore data
 *.csv
@@ -28,3 +31,5 @@ state/
 
 # Lock files and metadata
 package-lock.yml
+
+**/.ipynb_checkpoints

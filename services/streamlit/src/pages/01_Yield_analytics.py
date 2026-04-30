@@ -357,7 +357,6 @@ with tab_line:
 
                 if line_df.empty:
                     continue 
-                    
                 line_max_date = line_df["process_date"].max()
                 line_min_date = line_max_date - pd.Timedelta(days=window_days)
                 line_start_str = line_min_date.strftime('%Y-%m-%d')
@@ -377,7 +376,7 @@ with tab_line:
 
                 line_agg["yield_percentage"] = (line_agg["passed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 100
                 line_agg["ppm_defective"] = (line_agg["failed_wafers"] / line_agg["total_wafers_tested"].replace(0, np.nan)) * 1000000
-                line_agg = line_agg.sort_values("process_date", ascending=False)
+                line_agg = line_agg.sort_values("process_date", ascending=True)
                 line_agg["yield_rolling_7d"] = line_agg["yield_percentage"].rolling(window=7, min_periods=1).mean()
 
                 line_total_tested = line_agg["total_wafers_tested"].sum()

@@ -18,7 +18,7 @@ apply_page_config("Executive Overview", "🏭")
  
 st.title("🏭 SECOM Manufacturing Command Center")
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30 )
 def load_executive_data():
     try:
         with st.spinner("Waiting for Trino cluster & fetching data..."):
@@ -74,7 +74,7 @@ def load_executive_data():
                 FROM gold_oee_metrics
                 WHERE process_date = (SELECT md FROM max_d)
             """)
-        return kpis, trend, alarms, quarantine, oee_today
+            return kpis, trend, alarms, quarantine, oee_today
 
     except Exception as e:
         st.error(f"Trino query failed: {e}")
@@ -89,6 +89,11 @@ def render_dashboard():
     
     kpis, trend, alarms, quarantine, oee_today = load_executive_data()
     
+    if kpis is None or kpis.empty:
+        st.error("⚠️ Trino Cluster is currently unavailable or returned no data.")
+        st.info("The system is likely scaling up or experiencing high load. Please refresh in a few moments.")
+        st.stop()
+
     if kpis is None or kpis.empty:
         st.error("⚠️ Trino Cluster is currently unavailable or returned no data.")
         st.info("The system is likely scaling up or experiencing high load. Please refresh in a few moments.")
@@ -130,7 +135,7 @@ def render_dashboard():
         if len(kpis) > 1:
             yesterday_row = kpis.iloc[1]
             yield_delta = round(yield_pct - float(yesterday_row["yield_percentage"]), 2)
-
+            
             yesterday_dppm = float(yesterday_row["ppm_defective"])
             dppm_delta  = round(((dppm - yesterday_dppm) * 100 / yesterday_dppm) if yesterday_dppm != 0 else 0, 2)
         else:
@@ -172,7 +177,6 @@ def render_dashboard():
                 color_discrete_sequence=[TEAL], opacity=0.4,
                 labels={"yield_percentage": "Yield %", "process_date": "Date"}
             )
-
             fig.add_trace(go.Scatter(
                 x=trend_sorted["process_date"], y=trend_sorted["yield_rolling_7d"],
                 mode="lines", name="7-Day Trend",
@@ -186,7 +190,7 @@ def render_dashboard():
             fig.update_layout(
                 **PLOTLY_LAYOUT, height=280,
                 xaxis_title="Date", yaxis_title="Yield %",
-                yaxis_range=[max(0, trend_sorted["yield_percentage"].min() - 5), 105]
+                yaxis_range=[max(0, trend_sorted["yield_percentage"].min() - 5), 105],
             )
 
             fig.update_traces(cliponaxis=False)
