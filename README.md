@@ -32,6 +32,7 @@ The solution utilizes a **Medallion Lakehouse** pattern to decouple high-frequen
   - [Key Engineering Challenges](#key-engineering-challenges)
   - [ML \& Actionable AI (Development Branch)](#ml--actionable-ai-development-branch)
   - [How to Run](#how-to-run)
+  - [Quick Fix](#quick-fix)
   - [Roadmap \& Future Work](#roadmap--future-work)
   - [Author](#author)
   - [License](#license)
@@ -137,6 +138,11 @@ This project is fully containerized.
 5. Access the Home Page: http://localhost:8501
 
 ---
+### Quick Fix
+* **SPC Logics** Implementation of using moving range of controlled run to set control limit (local change) for a more stringent control.
+* **Nats Event** MinIO to send messages after receive files and not through generator daemon.
+
+
 ### Roadmap & Future Work
 
 * **Resilience:** Implementation of comprehensive exception handling and graceful shutdown for all microservices.
