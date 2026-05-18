@@ -176,28 +176,28 @@ This project is open source and available under the [MIT License](LICENSE).
 ---
 ### Appendices: Dashboard Overview
 1. Executive Overview: Headline KPIs (Yield, DPPM, Scrap Rate) with an active alarm banner for 24-hour SPC violations.
-![dashboard1](reports/figures/dashboard1.png)
+![dashboard1](reports/figures/dashboard1.svg)
    
 2. SPC Monitor: Interactive X-Charts with violation markers, $Cpk$ gauges for short-term and long-term capability, sensor health trend.
-![dashboard2-1](reports/figures/dashboard2-1.png)
-![dashboard2-2](reports/figures/dashboard2-2.png)
-![dashboard2-3](reports/figures/dashboard2-3.png)
+![dashboard2-1](reports/figures/dashboard2-1.svg)
+![dashboard2-2](reports/figures/dashboard2-2.svg)
+![dashboard2-3](reports/figures/dashboard2-3.svg)
    
 3. Yield Analytics: N-day rolling trends and GitHub-style calendar heatmaps for factory-wide yield visualization.
-![dashboard3-1](reports/figures/dashboard3-1.png)
-![dashboard3-2](reports/figures/dashboard3-2.png)
-![dashboard3-3](reports/figures/dashboard3-3.png)
-![dashboard3-4](reports/figures/dashboard3-4.png)
+![dashboard3-1](reports/figures/dashboard3-1.svg)
+![dashboard3-2](reports/figures/dashboard3-2.svg)
+![dashboard3-3](reports/figures/dashboard3-3.svg)
+![dashboard3-4](reports/figures/dashboard3-4.svg)
 
 4. Overall Equipment Effectiveness: Analysis of Availability, Performance and Quality of multiple production activities.
-![dashboard4](reports/figures/dashboard4.png)
+![dashboard4](reports/figures/dashboard4.svg)
    
 5. Failure Analysis: Point-biserial correlation Pareto charts and multicollinearity scatter matrices identifying correlated sensors.
-![dashboard5-1](reports/figures/dashboard5-1.png)
-![dashboard5-2](reports/figures/dashboard5-2.png)
+![dashboard5-1](reports/figures/dashboard5-1.svg)
+![dashboard5-2](reports/figures/dashboard5-2.svg)
 
 6. Simulator: Control center for the generation of synthetic data, quick test on the effect of sigma shift and generation log.
-![dashboard6](reports/figures/dashboard6.png)
+![dashboard6](reports/figures/dashboard6.svg)
 
 ---
 ### Attribution
